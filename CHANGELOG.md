@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6] - 2026-10-28
+
+### Fixed — 宿主模型没有 reasoning 元数据时 OCR 必然失败 / OCR failed for models without reasoning metadata
+
+现场报错：
+
+```
+OCR: （识别失败:宿主模型: 模型返回错误 UNSUPPORTED_REASONING_EFFORT:
+provider "workbuddy-global" model "deepseek-v4.1-flash"
+does not support reasoning effort "off" | 千问: 未配置 key(可选,配了就能兜底)）
+```
+
+- **根因**：`ocr.mjs` 过去无条件写死 `reasoningEffort: "off"`（本意是「识别不要思考，省输出
+  预算」）。但 DSH 的 `resolveCallWithInfo()` 里是这段逻辑：
+
+  ```js
+  const reasoning = info.reasoning;
+  if (reasoning === void 0) {
+    if (requested !== void 0) throw new LlmError(`provider "…" model "…" does not support reasoning effort "…"`, "UNSUPPORTED_REASONING_EFFORT");
+  }
+  ```
+
+  也就是说：**模型只要没有 reasoning 元数据，传任何 effort 值都会在发出网络请求之前被拒**。
+  `workbuddy-global/deepseek-v4.1-flash` 恰好没有 reasoning 元数据，于是整条识别链在第一步
+  就断了，回落到千问又因为没配 key 而报第二条错 —— 两条拼成上面那句。
+
+- **修法**：新增 `pickReasoningEffort()`，调用前先 `llm.resolveModelInfo(provider, model)` 查
+  真实能力再决定：
+  - 没有 `reasoning` 元数据 → **整个字段省略**（不传即走适配器默认，这是唯一能过的形状）；
+  - 有 `reasoning.efforts` 且含 `off` → 传 `off`（保留原本「识别不思考」的意图）；
+  - 有 `reasoning` 但没有 `off` → 用它的 `defaultEffort`；
+  - 两者都没有，或能力查询本身失败 → 省略。
+
+- **额外兜底**：若能力查询与实际 dispatch 之间对不上（适配器 HMR、目录抖动），捕获到
+  `UNSUPPORTED_REASONING_EFFORT` 时**去掉 effort 自动重试一次**，并打一条 warn ——
+  少一个控制项，好过整条识别失败。
+
+- **新增回归测试** `test/test-reasoning.mjs`（已并入 `npm test`）：用假宿主复现四种元数据形态，
+  断言「无 reasoning 元数据时绝不传 effort」且识别仍成功。不需要 key、不联网。
+
 ## [0.2.5] - 2026-10-28
 
 ### Changed — DSH 0.2 元数据与卡片分类对齐 / DSH 0.2 metadata & card-kind alignment

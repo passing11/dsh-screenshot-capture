@@ -93,25 +93,40 @@ async function ocrHost(config, imagePath, host) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
+  // 识别只要结果,不要推理:推理会吃掉输出预算,把整批变成"解析为空"。
+  // 但**不能无条件传**:DSH 的 resolveCallWithInfo() 在模型的 reasoning 元数据缺失时,
+  // 只要看到 reasoningEffort 就抛 UNSUPPORTED_REASONING_EFFORT(实测
+  // workbuddy-global/deepseek-v4.1-flash 就是这样,连请求都发不出去)。
+  // 所以先问模型要能力,只传它自己公布的档位;它没有推理能力就整个省略。
+  const effort = await pickReasoningEffort(llm, route);
   let out = "";
   try {
-    for await (const chunk of llm.stream({
+    out = await streamText(llm, {
       provider: route.provider,
       model: route.model,
       messages: [message],
-      // 识别只要结果,不要推理:推理会吃掉输出预算,把整批变成"解析为空"
-      reasoningEffort: "off",
+      ...(effort === undefined ? {} : { reasoningEffort: effort }),
       maxTokens: 4000,
       signal: controller.signal,
-    })) {
-      if (chunk?.type === "text-delta" && typeof chunk.text === "string") out += chunk.text;
-      if (chunk?.type === "finish" && chunk.reason?.kind === "error") {
-        throw new Error(`模型返回错误 ${chunk.reason.failure?.code ?? "unknown"}: ${chunk.reason.failure?.message ?? ""}`);
-      }
-    }
+    });
   } catch (err) {
     if (err?.name === "AbortError") throw new Error("宿主模型调用超时(120s)");
-    throw err;
+    // 兜底:能力查询与真实 dispatch 之间若仍对不上(适配器 HMR、目录变化),
+    // 去掉 effort 再试一次 —— 少一个控制项,好过整条识别失败。
+    if (effort !== undefined && /UNSUPPORTED_REASONING_EFFORT/.test(String(err?.message ?? ""))) {
+      host.logger?.warn?.(
+        `dsh-screenshot-capture: ${route.provider}/${route.model} 拒绝 reasoningEffort=${effort},改为不指定后重试`,
+      );
+      out = await streamText(llm, {
+        provider: route.provider,
+        model: route.model,
+        messages: [message],
+        maxTokens: 4000,
+        signal: controller.signal,
+      });
+    } else {
+      throw err;
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -119,6 +134,48 @@ async function ocrHost(config, imagePath, host) {
   const text = out.trim();
   if (!text) throw new Error("宿主模型返回空文本");
   return text;
+}
+
+/**
+ * 收一次 stream,把 text-delta 拼成全文;`finish.reason.kind === "error"` 转成异常。
+ * 抽出来是为了让"带 effort"和"不带 effort 重试"两条路共用同一段收流逻辑。
+ */
+async function streamText(llm, options) {
+  let out = "";
+  for await (const chunk of llm.stream(options)) {
+    if (chunk?.type === "text-delta" && typeof chunk.text === "string") out += chunk.text;
+    if (chunk?.type === "finish" && chunk.reason?.kind === "error") {
+      throw new Error(`模型返回错误 ${chunk.reason.failure?.code ?? "unknown"}: ${chunk.reason.failure?.message ?? ""}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * 决定这次调用要不要带 reasoningEffort、带哪个。
+ *
+ * 规则(对齐 DSH 的 resolveCallWithInfo 校验,见 app.asar):
+ *  - 模型**没有** reasoning 元数据 → 返回 undefined,**一个字段都不传**。
+ *    传任何值都会被判 UNSUPPORTED_REASONING_EFFORT(这就是
+ *    workbuddy-global/deepseek-v4.1-flash 上"识别失败"的直接原因)。
+ *  - 有 reasoning.efforts → 优先 "off"(识别不需要思考,省输出预算);
+ *    没有 off 就退而用它的 defaultEffort;再没有就不传(交给适配器默认)。
+ *  - 查询失败(适配器未注册/目录抖动)→ undefined,不传,让请求自己决定。
+ */
+async function pickReasoningEffort(llm, route) {
+  if (typeof llm.resolveModelInfo !== "function") return undefined;
+  let info;
+  try {
+    info = await llm.resolveModelInfo(route.provider, route.model);
+  } catch {
+    return undefined;
+  }
+  const reasoning = info?.reasoning;
+  if (!reasoning) return undefined;
+  const ids = (reasoning.efforts ?? []).map((e) => e?.id).filter(Boolean);
+  if (ids.includes("off")) return "off";
+  if (reasoning.defaultEffort && ids.includes(reasoning.defaultEffort)) return reasoning.defaultEffort;
+  return undefined;
 }
 
 /**
