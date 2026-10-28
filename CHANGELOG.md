@@ -3,6 +3,33 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5] - 2026-10-28
+
+### Changed — DSH 0.2 元数据与卡片分类对齐 / DSH 0.2 metadata & card-kind alignment
+
+**No behavior change.** Three declaration-level fixes so the package states its DSH 0.2 support
+explicitly instead of relying on the peer range alone.
+
+- `package.json` 增加 `dsh.manifestVersion: 1`（包清单格式版本；DSH 0.2 的
+  `@deepseek-ai/dsh-package-manifest` 定义的当前值为 `1`）。
+- `package.json` 增加 `engines.dsh: ">=0.0.1-rc.1 <0.3.0-0"`。**注意这条会接管版本判定**：DSH 的
+  `unmetRequirements()` 在插件自带 `engines.dsh` 时**只**看这个范围，`peerDependencies` 里的
+  `@deepseek-ai/dsh-*` 检查全部跳过。选定范围实测覆盖 `0.0.1-rc.1` / `0.1.5-rc.3` / `0.1.7-rc.2` /
+  `0.2.0-rc.1` / `0.2.0` / `0.2.1` / `0.2.1-rc.3`，`0.3.0-rc.1` 起拒绝。
+- `repository` / `homepage` / `bugs` 指向 fork `passing11/dsh-screenshot-capture`（`author` 保留上游
+  `wangzhanchao883` 署名）。
+- `index.mjs` 的 `textTool().presentCall()` 把 `kind: "text"` 改为 `kind: "read"`：DSH 0.2 的
+  `ToolCallKind` 枚举是 `read | edit | delete | move | search | execute | fetch | other`，`"text"` 不在其中
+  （运行时不做校验，只是该工具卡片不参与分类）。
+
+### Verified — DSH `0.2.1-rc.3` 本地实测
+
+- 独立 profile `scc-compat-test` 用 `dsh plugin add` 安装成功，`dsh --profile scc-compat-test --dump-config`
+  退出码 0、363 行、无 `FAILED` / `rejected` / `incompatible`。
+- `--dump-config-schema` 里 `config66` 的 13 个字段全部存在且全部 `x-cordis.volatile: true`。
+- desktop profile 上插件实际运行：`screenshot_status` 报「监听:运行中」，Web 设置页 `settings.section`
+  的 occupants 里本插件 `active: true`。
+
 ## [0.2.4] - 2026-10-02
 
 **发布通道迁移 —— 无代码变更、无行为变更。**

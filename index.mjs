@@ -391,7 +391,9 @@ function textTool(definition) {
     },
     presentCall: (args) => ({
       card: "generic",
-      kind: "text",
+      // ToolCallKind(DSH 0.2)只认 read/edit/delete/move/search/execute/fetch/other;
+      // 旧写法 "text" 不在枚举里,只是不参与分类,这里对齐成 read(只读查询类工具)。
+      kind: "read",
       title: definition.name,
       rawInput: args,
     }),

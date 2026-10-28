@@ -44,7 +44,8 @@ DSH 设置 →「截图入库」图形配置界面:
 ## 环境要求 / Requirements
 
 - **Windows**(依赖系统自带 PowerShell 5.1 + WinForms)
-- **DSH 0.1.7+**(Web 设置页依赖 `configForms` 服务;旧版 DSH 上 host 功能照用、设置页不出现)
+- **DSH 0.1.7 ~ 0.2.x**(Web 设置页依赖 `configForms` 服务;0.1.7 之前的旧版 DSH 上 host 功能照用、设置页不出现。
+  `package.json` 里声明了 `engines.dsh: ">=0.0.1-rc.1 <0.3.0-0"`,超出该范围安装器会以 `incompatible-version` 拒绝)
 - **宿主大模型 OCR**:需要 DSH 已加载 `llm` + `attachments` 服务,且当前模型在目录里声明了
   `inputModalities: [ text, image ]`(DSH 里看到"图片输入"能力的模型即可)。不满足会自动回落千问
 - 通义千问 API key(**可选**,只在回落时用到;通过 `DASHSCOPE_API_KEY` 环境变量,或插件配置文件)
@@ -57,7 +58,7 @@ DSH 设置 →「截图入库」图形配置界面:
 dsh plugin --profile desktop add dsh-screenshot-capture
 
 # 从 GitHub 源安装
-dsh plugin --profile desktop add github:wangzhanchao883/dsh-screenshot-capture
+dsh plugin --profile desktop add github:passing11/dsh-screenshot-capture
 
 # 或用本地目录(开发时)
 dsh plugin --profile desktop add ./dsh-screenshot-capture
