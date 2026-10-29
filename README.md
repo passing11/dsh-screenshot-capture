@@ -53,16 +53,36 @@ DSH 设置 →「截图入库」图形配置界面:
 
 ## 安装 / Install (DSH plugin)
 
+> ⚠️ **不要装 npm 上的 `dsh-screenshot-capture`** —— 那个包属于原作者 `wangzhanchao883`，
+> 停在 **0.2.4**，不含本 fork 的自动关闭 / 悬停冻结 / 双按钮 / OCR 修复。请用下面的方式之一。
+
+**方式一：直接从 GitHub 仓库安装（推荐）**
+
 ```sh
-# 从 npm 安装(若已发布)
-dsh plugin --profile desktop add dsh-screenshot-capture
-
-# 从 GitHub 源安装
 dsh plugin --profile desktop add github:passing11/dsh-screenshot-capture
-
-# 或用本地目录(开发时)
-dsh plugin --profile desktop add ./dsh-screenshot-capture
 ```
+
+**方式二：下载 `.tgz` 安装包**
+
+下载地址（v0.3.1）：
+
+<https://github.com/passing11/dsh-screenshot-capture/releases/download/v0.3.1/dsh-screenshot-capture-0.3.1.tgz>
+
+```sh
+dsh plugin --profile desktop add "E:/下载/dsh-screenshot-capture-0.3.1.tgz"
+```
+
+Windows 上必须用带盘符的完整路径（`/tmp/...` 这类 MSYS 路径 pnpm 认不出）。
+
+**方式三：本地目录（开发调试）**
+
+```sh
+dsh plugin --profile desktop add "E:/dsh插件生成/dsh-screenshot-capture"
+```
+
+这种装法会在 profile 的 `node_modules` 里建符号链接，改源码即生效，适合自己改代码。
+
+> 装完用 `dsh plugin --profile desktop list | grep screenshot` 确认版本是 **0.3.1**。
 
 重启 DSH 后生效。剪贴板监听与悬浮窗由插件 host 端自动拉起(需要 DSH 运行中)。
 

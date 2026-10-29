@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.3.1] - 2026-10-29
 
+### Added — 可下载的安装包 / Downloadable release artifact
+
+打了 `v0.3.1` tag 并发布 GitHub Release，附带 `dsh-screenshot-capture-0.3.1.tgz`：
+
+<https://github.com/passing11/dsh-screenshot-capture/releases/download/v0.3.1/dsh-screenshot-capture-0.3.1.tgz>
+
+README 的安装章节重写，明确区分三种装法，并警告 **npm 上的同名包是上游 0.2.4**，
+不含本 fork 的任何改动 —— 之前踩过的坑：profile 里声明成 `"0.2.4"` 时，
+任何一次 `pnpm install` 都会把手工 `cp` 进去的改动覆盖回 npm 版本。
+
+三种方式均实测通过（干净 profile 各装一次，装出来都是 0.3.1）：
+`github:passing11/dsh-screenshot-capture`、Release 的 `.tgz` 绝对路径、本地目录 link。
+
 ### Changed — 指针位置统一走 `Get-PointerPosition`，测试不再挪真实鼠标 / Tests no longer move the real cursor
 
 `clip-dialog.ps1` 新增 `Get-PointerPosition`：默认返回真实光标，但自动化测试可以把
