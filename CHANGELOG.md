@@ -3,6 +3,135 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-10-29
+
+### Changed — 指针位置统一走 `Get-PointerPosition`，测试不再挪真实鼠标 / Tests no longer move the real cursor
+
+`clip-dialog.ps1` 新增 `Get-PointerPosition`：默认返回真实光标，但自动化测试可以把
+`$script:PointerOverride` 设成一个返回 `Point` 的 scriptblock 来**模拟**指针位置。
+窗口定位与「指针在窗上就冻结倒计时」两处判断都改走这个入口。
+
+动机是测试可靠性，不是产品行为：
+
+- 以前的窗口测试直接写 `[System.Windows.Forms.Cursor]::Position` 挪真光标。
+  测试跑几秒，这几秒里用户没法用鼠标；更糟的是**用户一动鼠标就跟测试抢**，
+  产品逻辑是对的，测试却报「用时不足」—— 实测 4 次跑 2 过 2 挂。
+- 现在纯逻辑驱动，不碰硬件。同一套窗口测试连跑 8 轮 × 3 个文件 = 24 次全过
+  （改之前失败率约 30%）。
+
+### Fixed — 布局测试偶发挂死 / Layout test could hang forever
+
+`test-dialog-layout.ps1` 原来用 `[System.Windows.Forms.Form]::ActiveForm` 找窗体，
+拿到 `null` 时后面 `SendKeys` 的 Esc 发不出去，模态窗永远不返回，测试挂到超时。
+改为从 `Application.OpenForms` 按标题找（不依赖焦点）并直接 `Close()`，另加一个
+15 秒看门狗兜底关窗。同样的 `ActiveForm` 依赖也从 hover 测试里去掉了。
+
+## [0.3.0] - 2026-10-29
+
+### Removed — 去掉「复制截图」按钮 / Dropped the "copy screenshot" button
+
+那个按钮什么也没做：剪贴板里本来就还是原图，点它跟直接按 Esc 一样。想让剪贴板
+留着不动的用户按 Esc、或者让窗自己超时关就行，不需要专门一个按钮。
+
+现在悬浮窗只有 **存文档 / 存图片** 两个按钮。Esc 与自动关闭的行为不变（不写库、
+剪贴板原样保留），只是内部动作名从 `copy` 改成 `ignore` 更贴切。
+
+> `core.mjs` 仍然认 `copy`，这样升级前已在跑的旧 PowerShell 助手不会因为动作名
+> 变了而落进「未知动作」分支。
+
+### Fixed — 去掉按钮后预览图被横向裁掉 / Preview clipped after the button row shrank
+
+窗宽原来只按按钮行算（`pad*2 + bw*3 + gap*2`），预览图按 `previewMaxWidth` 独立算，
+两者谁也不管谁。三键时代窗宽 292、图 320，本来就超了 28px 没被发现；去掉一个按钮后
+窗宽掉到 198，320 宽的预览直接缺了一半。
+
+现在 `$totalW = [Math]::Max($rowW, $pw + $pad * 2)` —— 取「按钮行」与「预览图」
+较宽的那个。顺带把预览图的 `Location.X` 从硬编码的 `8` 改成 `$pad`。
+
+### Tests
+
+- `test/test-dialog-layout.ps1`（`npm run test:window:layout`）—— 读出真实窗体的
+  控件树，断言：只有两个按钮、没有「复制截图」、预览图与注释框都在窗内且宽度对齐、
+  所有按钮不越界。这条是专门为上面那个裁切漏子加的。
+
+## [0.2.9] - 2026-10-29
+
+### Changed — 鼠标停在窗口上时不再倒计时 / Pause while the pointer is over the window
+
+上一版有意**不**监听鼠标移动，理由是窗口就弹在光标旁边，轻微抖动会不断重置、
+永远关不掉。实际用下来这个取舍反了：指针压在窗上往往正是用户在读预览、准备点
+按钮的时刻，这时候关窗是在跟人抢手。
+
+现在的规则是：
+
+- 指针在窗**内** → 倒计时冻结，不关。
+- 指针**离开** → 重新给满一轮。所以「5 秒」的语义是「你不碰它 5 秒」，
+  不是「从弹出算 5 秒」。
+- 判据是屏幕坐标比较 `Cursor.Position` 与 `Form.Bounds`，不是 MouseEnter/Leave
+  事件 —— 窗按 `offsetX/offsetY` 摆在光标右下方，刚弹出时指针本来就在窗**外**，
+  不移动的话照常倒计时，行为与之前一致。
+
+### Tests
+
+- `test/test-autoclose-hover.ps1`（`npm run test:window:hover`）—— 把
+  `offsetX/offsetY` 设成 0 让指针一开始就落在窗内，然后用一个跑在同一个消息泵里的
+  Timer 在 3 秒后把光标挪走，断言：悬停期间窗没被关、离开后重新给满一轮才关、
+  最终走忽略分支。
+
+## [0.2.8] - 2026-10-29
+
+### Fixed — profile 条目里写的 config 一直被静默丢弃 / Profile config silently dropped
+
+上一版加的 `dialogAutoCloseSec` 在设置面板里看得见、改得动，但改完没有任何反应：
+`%TEMP%\dsh-capture\watcher-config.json` 里永远是 `autoCloseSec: 0`。
+
+- **根因**：宿主交给插件的配置是**扁平**的 —— `apply(ctx, input)` 的 `input` 和
+  `settings.describe()` 的 `row.user` 都用 Config schema 里的字段名当键
+  （`dialogAutoCloseSec`）。而代码里两处都写的是 `toFlat(plain(input))` /
+  `toFlat(plain(row.user))`，`toFlat()` 要的是**嵌套**结构（`dialog.autoCloseSec`）。
+  于是每个字段都读成 `undefined`，紧接着 `dropDefaults()` 把它们全过滤掉 ——
+  profile 条目里 `config: { dialogAutoCloseSec: 5 }` 从来没进过 watcher。
+- 这个 bug 从 0.1.x 就存在，只是没暴露：`~/.dsh-screenshot-capture/config.json`
+  那一层用的确实是嵌套结构，走 `toFlat()` 恰好是对的；而宿主 profile 条目里的扁平
+  config 才是**真正的权威值**，一直被无视。任何在设置面板里改的字段（不只是自动
+  关闭）都属于这一类。
+
+### Added
+
+- `flattenConfig(value)` —— 自动判断输入形态：含嵌套对象就走 `toFlat()`，否则原样透传。
+  两处调用点都换成它。
+- `test/test-config-shape.mjs` —— 钉住扁平 / 嵌套 / Volatile cell / 空值四种输入形态，
+  并端到端验证扁平 config 里的非默认值能活过 `dropDefaults()`。
+
+## [0.2.7] - 2026-10-29
+
+### Added — 悬浮窗可以自动关闭 / Auto-close the floating window
+
+设置页「悬浮窗」组新增 **自动关闭 (秒)**，对应配置字段 `dialog.autoCloseSec`（默认 `0`）。
+
+- `0` = 保持原行为，一直等你点按钮。填了秒数，到点窗口自己收起。
+- 收起等同**忽略**（和按 Esc 一样）：`action=copy`、剪贴板原样保留、不写库、不弹下一层。
+  故意没做成「自动存文档」—— 没有人确认的截图不该落进笔记里。
+- **敲键盘 / 改注释 / 点窗口 / 勾「重点」会重新计时**，免得写到一半窗没了。
+  没有监听鼠标移动：窗口就弹在鼠标位置，指针本来就压在上面，任何轻微抖动都会不断
+  重置，那样永远关不掉。
+- 事件日志的 `choice` 行多一个 `autoClosed` 字段，可以分辨「用户点了忽略」和「超时自动收起」。
+
+实现注意：必须用 `System.Windows.Forms.Timer`，且计时只在窗体的 `Shown` 事件里启动
+（构造 + 布局的时间不算进倒计时）。`Threading.Timer` 或 `Start-Sleep` 会在别的线程上
+动控件，会炸。
+
+### Changed
+
+- `ClipboardWatcher` 把「写 watcher-config.json」抽成 `writeWatcherConfig()`，
+  测试可以只跑这一步，不必真 spawn 一个 PowerShell。
+
+### Tests
+
+- `test/test-autoclose.mjs` —— JS 这半边的字段传递（缺省 0、小数秒、不丢其它字段、秒→毫秒换算）。
+- `test/test-autoclose-dialog.ps1`（`npm run test:window`）—— 真窗口行为：到点自动关、
+  用时落在 2000–3500ms、不写注释不勾重点、`0` 时不建 Timer、三个重置入口都挂着。
+
 ## [0.2.6] - 2026-10-28
 
 ### Fixed — 宿主模型没有 reasoning 元数据时 OCR 必然失败 / OCR failed for models without reasoning metadata

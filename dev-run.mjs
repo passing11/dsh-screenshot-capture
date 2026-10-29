@@ -35,7 +35,7 @@ watcher.on("choice", async (ev) => {
   try {
     const r = await handleChoice(config, ev);
     console.log(`[dev] ${r.note}`);
-    if (r.action !== "copy") {
+    if (r.action !== "ignore") {
       console.log(`[dev]   笔记: ${r.notePath}`);
       if (r.ocrText) console.log(`[dev]   OCR(${r.ocrText.length}字): ${r.ocrText.slice(0, 100)}…`);
       if (r.ocrError) console.error(`[dev]   OCR 失败: ${r.ocrError}`);

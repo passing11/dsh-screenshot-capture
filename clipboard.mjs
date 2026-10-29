@@ -33,6 +33,30 @@ export class ClipboardWatcher extends EventEmitter {
     this.started = false;
   }
 
+  /**
+   * 把配置摊平成助手脚本认的那份 JSON,写到 workDir/watcher-config.json。
+   *
+   * 单独抽出来是为了能测:start() 会 spawn powershell,而「字段有没有漏传」
+   * 只需要这一步。之前测这条链要真起一个进程,测完还得收拾,很容易测了个寂寞。
+   * @returns 写出的配置对象(方便测试直接断言,不用再读文件)。
+   */
+  writeWatcherConfig() {
+    const flat = {
+      pollIntervalMs: this.config.pollIntervalMs ?? 200,
+      cooldownMs: this.config.cooldownMs ?? 2000,
+      offsetX: this.config.dialog?.offsetX ?? 16,
+      offsetY: this.config.dialog?.offsetY ?? 16,
+      previewMaxWidth: this.config.dialog?.previewMaxWidth ?? 320,
+      // 同一屏被剪贴板写两遍时的去重窗口(秒级);0 = 不去重
+      dupWindowMs: this.config.dupWindowMs ?? 6000,
+      // 悬浮窗自动关闭秒数;0 = 一直等用户点
+      autoCloseSec: this.config.dialog?.autoCloseSec ?? 0,
+    };
+    mkdirSync(this.workDir, { recursive: true });
+    writeFileSync(join(this.workDir, "watcher-config.json"), JSON.stringify(flat), "utf8");
+    return flat;
+  }
+
   start() {
     if (this.started) return;
     this.started = true;
@@ -41,15 +65,7 @@ export class ClipboardWatcher extends EventEmitter {
     else this.offset = 0;
 
     const cfgFile = join(this.workDir, "watcher-config.json");
-    writeFileSync(cfgFile, JSON.stringify({
-      pollIntervalMs: this.config.pollIntervalMs ?? 200,
-      cooldownMs: this.config.cooldownMs ?? 2000,
-      offsetX: this.config.dialog?.offsetX ?? 16,
-      offsetY: this.config.dialog?.offsetY ?? 16,
-      previewMaxWidth: this.config.dialog?.previewMaxWidth ?? 320,
-      // 同一屏被剪贴板写两遍时的去重窗口(秒级);0 = 不去重
-      dupWindowMs: this.config.dupWindowMs ?? 6000,
-    }), "utf8");
+    this.writeWatcherConfig();
 
     const args = [
       "-NoProfile",

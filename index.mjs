@@ -50,6 +50,8 @@ export const Config = z.object({
   dialogOffsetX: vol(z.number().min(-1000).max(1000).default(DEFAULT_CONFIG.dialog.offsetX)),
   dialogOffsetY: vol(z.number().min(-1000).max(1000).default(DEFAULT_CONFIG.dialog.offsetY)),
   dialogPreviewMaxWidth: vol(z.number().min(100).max(2000).default(DEFAULT_CONFIG.dialog.previewMaxWidth)),
+  // 悬浮窗自动关闭秒数。0 = 不自动关(默认),一直等用户点。
+  dialogAutoCloseSec: vol(z.number().min(0).max(3600).default(DEFAULT_CONFIG.dialog.autoCloseSec)),
 });
 
 const has = (flat, key) => Object.prototype.hasOwnProperty.call(flat, key) && flat[key] !== undefined;
@@ -70,11 +72,34 @@ function toFlat(config) {
     dialogOffsetX: config.dialog?.offsetX,
     dialogOffsetY: config.dialog?.offsetY,
     dialogPreviewMaxWidth: config.dialog?.previewMaxWidth,
+    dialogAutoCloseSec: config.dialog?.autoCloseSec,
   };
 }
 
 /** schema 默认值(DEFAULT_CONFIG 与 Config 逐字段同源,拿它当"没配过"的判据) */
 const DEFAULTS_FLAT = toFlat(DEFAULT_CONFIG);
+
+/**
+ * 把「可能嵌套、也可能扁平」的配置归一化成扁平结构。
+ *
+ * 宿主传进 `apply(ctx, input)` 的 input、以及 settings 投影出来的 `row.user`,
+ * 都是**扁平**的 —— 键就是 Config schema 里那些名字(`dialogAutoCloseSec`)。
+ * 而 `toFlat()` 要的是**嵌套**结构(`dialog.autoCloseSec`)。
+ *
+ * 早期版本两处都直接写了 `toFlat(input)` / `toFlat(row.user)`,于是每个字段都被
+ * 读成 undefined,`dropDefaults()` 再把它们全过滤掉 —— 结果是 profile 条目里
+ * 写的 `config: { dialogAutoCloseSec: 5 }` **永远进不了 watcher**(2026-10-29 定位)。
+ * 当初没暴露,是因为 `config.json` 这一层用的是嵌套结构,恰好走对;patch 里的
+ * 扁平 config 才是宿主真正的权威值。
+ */
+export function flattenConfig(value) {
+  const flat = plain(value);
+  if (flat === null || typeof flat !== "object" || Array.isArray(flat)) return {};
+  const isNested = Object.values(flat).some(
+    (item) => item !== null && typeof item === "object" && !Array.isArray(item),
+  );
+  return isNested ? toFlat(flat) : { ...flat };
+}
 
 /**
  * 丢掉"等于 schema 默认值"的字段。
@@ -112,6 +137,7 @@ function fromFlat(flat) {
   if (has(flat, "dialogOffsetX")) dialog.offsetX = flat.dialogOffsetX;
   if (has(flat, "dialogOffsetY")) dialog.offsetY = flat.dialogOffsetY;
   if (has(flat, "dialogPreviewMaxWidth")) dialog.previewMaxWidth = flat.dialogPreviewMaxWidth;
+  if (has(flat, "dialogAutoCloseSec")) dialog.autoCloseSec = flat.dialogAutoCloseSec;
   if (Object.keys(ocr).length > 0) out.ocr = ocr;
   if (Object.keys(dialog).length > 0) out.dialog = dialog;
   return out;
@@ -133,7 +159,7 @@ export function apply(ctx, input = {}) {
   // ① input 先 plain() 解包 Volatile cell(0.1.7 每个 volatile 字段都是 cell);
   // ② 再 dropDefaults 丢掉"等于 schema 默认值"的字段 —— 否则宿主灌进来的
   //    默认值(尤其 vaultPath: "")会把 config.json 里配好的路径冲掉。
-  let liveConfig = mergeSettings(resolveConfig(), dropDefaults(toFlat(plain(input))));
+  let liveConfig = mergeSettings(resolveConfig(), dropDefaults(flattenConfig(input)));
   // vaultPath 为空时**不碰磁盘**:ensureVault 用的是 join(vaultPath, ...),
   // 空路径会解析成相对路径、在进程 cwd 下凭空建出「收件箱/知识库」等目录 ——
   // 正是上面那条告警承诺过不会发生的事。
@@ -169,6 +195,7 @@ export function apply(ctx, input = {}) {
     dialogOffsetX: cfg.dialog?.offsetX,
     dialogOffsetY: cfg.dialog?.offsetY,
     dialogPreviewMaxWidth: cfg.dialog?.previewMaxWidth,
+    dialogAutoCloseSec: cfg.dialog?.autoCloseSec,
   });
 
   // ---- 宿主服务句柄(OCR 走宿主大模型用) ----
@@ -290,7 +317,7 @@ export function apply(ctx, input = {}) {
       if (!settings || typeof settings.describe !== "function") return;
       const row = settings.describe().find((r) => r.ns === SETTINGS_NS);
       if (!row) return;
-      const explicit = dropDefaults(toFlat(plain(row.user)));
+      const explicit = dropDefaults(flattenConfig(row.user));
       if (Object.keys(explicit).length === 0) return;
       liveConfig = mergeSettings(liveConfig, explicit);
       scheduleRestart();

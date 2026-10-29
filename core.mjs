@@ -35,7 +35,7 @@ export function createSerialQueue() {
 
 /**
  * 悬浮窗选择处理(插件与独立测试共用):
- *   copy → 剪贴板原样不动,仅清理临时图
+ *   ignore → 剪贴板原样不动,仅清理临时图(旧版叫 copy,仍然认,兼容升级前的悬浮窗)
  *   doc  → 图片入附件 + 当天笔记立即追加(#文档,OCR 占位)→ 后台 OCR → 回填文字
  *   img  → 图片入附件 + 当天笔记追加(#图片,无 OCR)
  * note/isKey 来自悬浮窗:用户注释 + 「重点」标记(标题一 # **重点**)。
@@ -45,9 +45,9 @@ export async function handleChoice(config, { action, path, note = "", isKey = fa
   const now = new Date();
   const { date, fileStamp, time } = stampParts(now);
 
-  if (action === "copy") {
+  if (action === "ignore" || action === "copy") {
     try { unlinkSync(path); } catch { /* ignore */ }
-    return { action, date, time, note: "已忽略(剪贴板原样保留,可直接粘贴)" };
+    return { action: "ignore", date, time, note: "已忽略(剪贴板原样保留,可直接粘贴)" };
   }
 
   const kind = action === "doc" ? KIND.DOC : KIND.IMG;

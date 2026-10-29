@@ -26,7 +26,15 @@ export const DEFAULT_CONFIG = Object.freeze({
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     prompt: "请识别图片中的全部文字内容,原样输出;数学公式用 LaTeX 输出。只输出识别结果,不要任何解释。",
   },
-  dialog: { offsetX: 16, offsetY: 16, previewMaxWidth: 320 },
+  dialog: {
+    offsetX: 16,
+    offsetY: 16,
+    previewMaxWidth: 320,
+    // 悬浮窗自动关闭秒数。0 = 关掉自动关闭,一直等用户点。
+    // 倒计时在你敲键盘 / 改注释 / 点窗口时重新喂满;到点等同「忽略」(copy),
+    // 剪贴板原样保留、不写库。
+    autoCloseSec: 0,
+  },
   // 同一屏被剪贴板连写两遍(Snipping Tool 常见)时的去重窗口,毫秒;0 = 关闭去重。
   // 不进设置面板(保持面板干净),需要时改 config.json。
   dupWindowMs: 6000,

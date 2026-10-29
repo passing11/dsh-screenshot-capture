@@ -38,6 +38,8 @@ window.__ModuleLoader__.load({
       dialogOffsetX: "横向偏移 (px)",
       dialogOffsetY: "纵向偏移 (px)",
       dialogPreviewMaxWidth: "预览最大宽度 (px)",
+      dialogAutoCloseSec: "自动关闭 (秒,0=不关)",
+      dialogAutoCloseHint: "到点自动收起,等同「忽略」:剪贴板原样保留、不写库。敲键盘 / 改注释 / 点窗口会重新计时。",
     };
 
     const en = {
@@ -64,6 +66,8 @@ window.__ModuleLoader__.load({
       dialogOffsetX: "Horizontal offset (px)",
       dialogOffsetY: "Vertical offset (px)",
       dialogPreviewMaxWidth: "Preview max width (px)",
+      dialogAutoCloseSec: "Auto-close (s, 0 = never)",
+      dialogAutoCloseHint: "Collapses on its own when time is up — same as ignoring: clipboard untouched, nothing stored. Typing, editing the note or clicking the window restarts the countdown.",
     };
 
     const STYLES = [
@@ -213,6 +217,11 @@ window.__ModuleLoader__.load({
           Field({
             label: t("dialogPreviewMaxWidth"),
             children: h(NumberInput, { value: v.dialogPreviewMaxWidth, min: 100, max: 2000, onCommit: (n) => save("dialogPreviewMaxWidth", n) }),
+          }),
+          Field({
+            label: t("dialogAutoCloseSec"),
+            hint: t("dialogAutoCloseHint"),
+            children: h(NumberInput, { value: v.dialogAutoCloseSec, min: 0, max: 3600, onCommit: (n) => save("dialogAutoCloseSec", n) }),
           }),
         ]),
         h("div", { className: "scc-status" }, status),
