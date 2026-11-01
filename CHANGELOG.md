@@ -3,6 +3,65 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-11-01
+
+### Added — 记住上次关闭时的位置和大小 / Remember where the window was left
+
+**需求**:窗口每次都弹在同一个地方,而人多半会把它挪到顺手的位置(副屏、
+角落、拖大一点)。每次重开都要重新挪,很烦。
+
+**改动**:`出现位置` 多了第三种 `记住上次位置`(原来的 `跟随鼠标` / `固定坐标`
+保持不变)。
+
+1. **`scripts/clip-dialog.ps1`**
+   - 新增 `Get-RememberedGeometry` / `Save-RememberedGeometry`,状态存成一个
+     独立小 JSON(`dialog-state.json`)。
+   - 位置分支从两路扩成三路:`remember` → `fixed` → `cursor`(逐级回落)。
+   - 挂 `$form.Add_FormClosing(...)` 记录外框 `Left/Top/Width/Height`。
+   - `$config` 新增 `statePath` 键。
+2. **`clipboard.mjs`** — `writeWatcherConfig()` 多传一个 `statePath`,
+   指向 `~/.dsh/dsh-screenshot-capture/dialog-state.json`。
+3. **`index.mjs`** — `dialogPositionMode` 的 union 加 `z.const("remember")`。
+4. **`client.js`** — 分段按钮加第三项,中英文文案各加一条。
+
+**几个不那么显然的决定**:
+
+- **不写回 `watcher-config.json`**。那份是插件每次重启都**整份重写**的配置
+  投影,往里写运行时状态,下次启动就被冲掉了。所以另开一个文件。
+- **存的是外框矩形,不是 ClientSize**。还原时也用 `$form.Size`。两边混着用
+  会让窗口每开一次就胖一圈边框。
+- **状态文件不能放 `tmpdir()`**。Windows 上每个进程/每个 shell 都可能拿到
+  不同的临时目录(单实例锁就栽过这个坑,见 0.4.1),而且系统清临时目录时会
+  连位置一起清掉。所以放 `homedir()` 下。
+- **读回来的值必须重新校验**。显示器拔了、分辨率变了、窗口被拖到不存在的
+  坐标上,都不能让窗弹到看不见的地方。判据是「整个窗口落在虚拟桌面内」——
+  只判一个角不够:宽 800 的窗钉在屏幕最右边只露 10px,用户同样够不着标题栏。
+  校验不过就退回 `cursor` 行为,不会什么都不弹。
+- **写文件用「临时文件 + Move」**。半截 JSON 会让下次启动读不到位置,而
+  `Move-Item` 在同一卷上是原子的。
+- **`Add_FormClosing` 的处理器必须 `.GetNewClosure()`**。它在 `ShowDialog`
+  的消息泵里执行,那时函数的局部作用域已经不在栈上,不捕获就全是 `$null`。
+- 最小化/最大化时不记 —— 那时候的 `Bounds` 不是用户想要的位置。
+- **路径每次现算,不缓存成脚本级变量**(`Get-StatePath`)。一开始写的是
+  `$statePath = if ($config.statePath) {...} else { Join-Path $tempDir "dialog-state.json" }`
+  放在脚本顶层。两个问题:一是测试把几何函数单独抠出来跑时那个变量还没赋值;
+  二是 `$tempDir` 为空时 `Join-Path` 会拼出**裸的** `dialog-state.json` ——
+  相对路径,落到当前工作目录里。真机上 cwd 是用户随便哪个文件夹,位置就丢了
+  (自测时确实在当前目录里生成了一个 43 字节的 `.tmp` 文件,才暴露出来)。
+  现在兜底值永远是绝对路径,`$tempDir` 为空就用 `Path::GetTempPath()`。
+
+**测试**:新增 `test/test-dialog-remember.ps1`(24 项断言),10 个场景:
+无记录退回 cursor / 有记录精确还原四个值 / 关窗前的移动和改大小被写回 /
+记录在虚拟桌面外时仍落在屏内 / 记录文件是半截 JSON 也不炸 / 记录比
+`MinimumSize` 小时按 `MinimumSize` 兜底 / `cursor` 与 `fixed` 模式都不受记录
+影响 / 源码层检查 / `$tempDir` 为空时兜底路径仍是绝对路径 / 显式 `statePath`
+原样使用。
+
+**顺带修了老测试**:`Get-FnSource` 原来用 `"function $name {"` 精确匹配,
+而带参数的声明是 `function Save-RememberedGeometry([int]$x, ...)` —— 名字后面
+紧跟括号,匹配不到。改成只匹配前缀再校验后继字符。5 个老脚本同步更新,
+并补上两个几何函数的加载(否则一弹窗就是 `CommandNotFoundException`)。
+
 ## [0.4.3] - 2026-11-01
 
 ### Added — 悬浮窗可以拖动边框改大小 / Resizable capture dialog

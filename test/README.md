@@ -13,6 +13,7 @@ npm run test:window:resize    # dialog resize + relayout (in-process, no clipboa
 npm run test:window:fixed     # fixed position / fixed size
 npm run test:window           # auto-close countdown
 npm run test:window:hover     # auto-close pauses while the pointer is over the window
+npm run test:window:remember  # remember-last-position state file and fallbacks
 npm run test:window:live      # real end-to-end (needs a free clipboard)
 npm run test:window:resize:live
 npm run test:ocr              # live OCR against Qwen — needs DASHSCOPE_API_KEY
@@ -32,6 +33,7 @@ npm run test:ocr              # live OCR against Qwen — needs DASHSCOPE_API_KE
 | `test-dialog-layout.ps1` | initial dialog layout: preview not clipped, everything inside the window |
 | `test-dialog-resize.ps1` | **resizable border** (`WS_THICKFRAME` on the real handle), minimum size, and the relayout after dragging bigger *and* smaller |
 | `test-dialog-fixed.ps1` | fixed position / fixed size, and that content still fits |
+| `test-dialog-remember.ps1` | `remember` mode: state file round-trip, fallback to cursor when the record is missing / off-screen / corrupt, and `MinimumSize` clamping |
 | `test-autoclose-dialog.ps1` | the countdown actually closes the dialog |
 | `test-autoclose-hover.ps1` | hovering pauses the countdown |
 | `test-live-fixed.ps1` | real spawn → clipboard → on-screen window rectangle |

@@ -67,10 +67,19 @@ if (-not (Test-Path $script)) { throw "找不到 $script" }
 # 抠函数:按名字找到 'function NAME {' 再按花括号配平到结尾。
 # 只抠原文不复制实现 —— 改源码这个测试就会跟着变。
 $src = Get-Content -Raw -Encoding UTF8 $script
+# 注意不能找 "function $name {" —— 带参数的函数声明是
+# "function Save-RememberedGeometry([int]$x, ...)",名字后面紧跟括号而不是空格。
+# 所以只匹配前缀,再从那里往后找第一个 '{'。
 function Get-FnSource([string]$text, [string]$name) {
-  $head = "function $name {"
+  $head = "function $name"
   $start = $text.IndexOf($head)
   if ($start -lt 0) { throw "脚本里没有 $name" }
+  # 防止前缀误命中(比如找 Get-Pointer 却匹配到 Get-PointerPosition):
+  # 名字后面必须是 ( 、空白 或 { 之一。
+  $after = $text[$start + $head.Length]
+  if ($after -ne '(' -and -not [char]::IsWhiteSpace($after) -and $after -ne '{') {
+    throw "脚本里没有 $name(只匹配到前缀)"
+  }
   $depth = 0
   $i = $text.IndexOf('{', $start)
   for (; $i -lt $text.Length; $i++) {
@@ -85,6 +94,14 @@ $body = Get-FnSource $src 'Show-CaptureDialog'
 $ptrFn = Get-FnSource $src 'Get-PointerPosition'
 $script:PointerOverride = $null
 Invoke-Expression $ptrFn
+# Show-CaptureDialog 现在还会调这两个几何函数(记住上次位置)。抠函数跑测试
+# 时得把它们一起加载进来,否则一弹窗就是 CommandNotFoundException。
+# $tempDir 也要建好:默认 statePath 是从它拼出来的。
+$script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ('dsc-t-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $script:tempDir -Force | Out-Null
+Invoke-Expression (Get-FnSource $src 'Get-StatePath')
+Invoke-Expression (Get-FnSource $src 'Get-RememberedGeometry')
+Invoke-Expression (Get-FnSource $src 'Save-RememberedGeometry')
 Invoke-Expression $body
 if (-not (Get-Command Show-CaptureDialog -ErrorAction SilentlyContinue)) { throw 'Invoke-Expression 之后没有 Show-CaptureDialog' }
 if (-not (Get-Command Get-PointerPosition -ErrorAction SilentlyContinue)) { throw '脚本里缺 Get-PointerPosition(模拟指针入口)' }

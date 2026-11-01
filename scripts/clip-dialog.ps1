@@ -48,11 +48,11 @@ function Write-Event([hashtable]$obj) {
   try { [Console]::Out.WriteLine($line); [Console]::Out.Flush() } catch {}
 }
 
-$config = @{ pollIntervalMs = 200; cooldownMs = 2000; positionMode = "cursor"; fixedX = 0; fixedY = 0; offsetX = 16; offsetY = 16; previewMaxWidth = 320; width = 0; height = 0; dupWindowMs = 6000; autoCloseSec = 0 }
+$config = @{ pollIntervalMs = 200; cooldownMs = 2000; positionMode = "cursor"; fixedX = 0; fixedY = 0; offsetX = 16; offsetY = 16; previewMaxWidth = 320; width = 0; height = 0; dupWindowMs = 6000; autoCloseSec = 0; statePath = "" }
 if ($ConfigPath -and (Test-Path $ConfigPath)) {
   try {
     $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
-    foreach ($k in @('pollIntervalMs','cooldownMs','positionMode','fixedX','fixedY','offsetX','offsetY','previewMaxWidth','width','height','dupWindowMs','autoCloseSec')) {
+    foreach ($k in @('pollIntervalMs','cooldownMs','positionMode','fixedX','fixedY','offsetX','offsetY','previewMaxWidth','width','height','dupWindowMs','autoCloseSec','statePath')) {
       if ($null -ne $cfg.$k) { $config[$k] = $cfg.$k }
     }
   } catch { Write-Event @{ t = "err"; msg = "config parse: $($_.Exception.Message)" } }
@@ -119,6 +119,58 @@ $script:PointerOverride = $null
 function Get-PointerPosition {
   if ($null -ne $script:PointerOverride) { return (& $script:PointerOverride) }
   return [System.Windows.Forms.Cursor]::Position
+}
+
+# --- 记住上次关闭时的位置和大小 --------------------------------------------
+#
+# 存在一个独立的小 JSON 里,而不是写回 watcher-config.json —— 那份是插件每次
+# 重启都会**整份重写**的配置投影,往里写运行时状态会在下次启动时被冲掉。
+#
+# 读回来的值必须重新校验:显示器拔了、分辨率变了、窗口被拖到不存在的坐标上,
+# 都不能让窗弹到看不见的地方。位置只接受"至少有一角落在虚拟桌面内",
+# 尺寸按 MinimumSize 夹一遍。
+# 路径每次现算,不缓存成脚本级变量 —— 两个理由:
+#   1. 测试会把这个函数单独抠出来跑,那时脚本级变量还没赋值;
+#   2. 兜底值必须**永远**是绝对路径。写成 Join-Path $tempDir 而 $tempDir 又恰好
+#      为空时,会退化成相对路径 "dialog-state.json",落到当前工作目录里 ——
+#      真机上 cwd 是用户的随便哪个文件夹,文件就丢了。
+function Get-StatePath {
+  if ($config.statePath) { return [string]$config.statePath }
+  $dir = if ($tempDir) { [string]$tempDir } else { [System.IO.Path]::GetTempPath() }
+  return Join-Path $dir "dialog-state.json"
+}
+
+function Get-RememberedGeometry {
+  try {
+    $statePath = Get-StatePath
+    if (-not (Test-Path $statePath)) { return $null }
+    $s = Get-Content $statePath -Raw | ConvertFrom-Json
+    $rx = [int]$s.x; $ry = [int]$s.y
+    $rw = [int]$s.width; $rh = [int]$s.height
+    $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    # 窗口得**整个**落在虚拟桌面内才认。只判一个角不够:宽 800 的窗钉在
+    # 屏幕最右边只露 10px,用户同样够不着标题栏去拖回来。
+    if ($rw -le 0 -or $rh -le 0) { return $null }
+    if ($rx -lt $vs.Left -or $ry -lt $vs.Top) { return $null }
+    if (($rx + $rw) -gt $vs.Right -or ($ry + $rh) -gt $vs.Bottom) { return $null }
+    return @{ x = $rx; y = $ry; width = $rw; height = $rh }
+  } catch { return $null }
+}
+
+function Save-RememberedGeometry([int]$x, [int]$y, [int]$w, [int]$h) {
+  # 最小化/最大化时不记 —— 那时候的 Bounds 不是用户想要的位置。
+  if ($w -le 0 -or $h -le 0) { return }
+  try {
+    $statePath = Get-StatePath
+    $obj = @{ x = $x; y = $y; width = $w; height = $h }
+    $json = $obj | ConvertTo-Json -Compress
+    # 先写临时文件再 Move —— 半截 JSON 会让下次启动读不到位置,
+    # 而 Move 在同一卷上是原子的。
+    $tmp = "$statePath.tmp"
+    [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding $false))
+    if (Test-Path $statePath) { Remove-Item $statePath -Force -ErrorAction SilentlyContinue }
+    Move-Item -LiteralPath $tmp -Destination $statePath -Force -ErrorAction SilentlyContinue
+  } catch { }
 }
 
 function Show-CaptureDialog {
@@ -324,18 +376,30 @@ function Show-CaptureDialog {
   }
 
   # --- 位置 ---------------------------------------------------------------
-  # 两种模式:
+  # 三种模式:
   #   cursor(默认):跟着鼠标,按 offsetX/offsetY 摆在光标右下方;放不下就翻到
   #                 左上侧(历史行为,原样保留)。
   #   fixed        :每次都出现在 fixedX/fixedY 这个**屏幕坐标**上,与鼠标无关。
   #                 多显示器下坐标系是整个虚拟桌面(副屏在主屏左边时 x 为负),
   #                 所以这里用 VirtualScreen 而不是某个 Screen 的 WorkingArea ——
   #                 否则钉在副屏上的窗会被 clamp 回主屏。
-  # 两种模式都保留"别跑出屏幕"的收敛,但 fixed 模式下若用户明确钉在副屏,
+  #   remember     :沿用上次关闭时的位置**和大小**。没记录过(或记录已失效,
+  #                 比如那块屏拔了)就退回 cursor 行为,不至于弹到看不见的地方。
+  # 三种模式都保留"别跑出屏幕"的收敛,但 fixed 模式下若用户明确钉在副屏,
   # 只要该点在虚拟桌面内就按用户说的摆。
   $totalW = [int]$totalW
   $totalH = [int]$totalH
-  if ([string]$config.positionMode -eq "fixed") {
+  $remembered = Get-RememberedGeometry
+  $useRemember = ([string]$config.positionMode -eq "remember") -and ($null -ne $remembered)
+  if ($useRemember) {
+    # 记录的是**外框**矩形(Left/Top/Width/Height),所以还原也用外框,
+    # 不能用 ClientSize —— 两边混着用会让窗口每开一次就胖一圈边框。
+    $totalW = [Math]::Max([int]$remembered.width, [int]$form.MinimumSize.Width)
+    $totalH = [Math]::Max([int]$remembered.height, [int]$form.MinimumSize.Height)
+    $x = [int]$remembered.x
+    $y = [int]$remembered.y
+    $form.Size = New-Object System.Drawing.Size($totalW, $totalH)
+  } elseif ([string]$config.positionMode -eq "fixed") {
     $x = [int]$config.fixedX
     $y = [int]$config.fixedY
     $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -358,6 +422,18 @@ function Show-CaptureDialog {
     $y = [Math]::Max($wa.Top, $y)
   }
   $form.Location = New-Object System.Drawing.Point($x, $y)
+
+  # 关窗时把外框位置记下来。所有关法都走这里 —— 按钮、Esc、右上角 X、
+  # 自动关闭倒计时,对用户来说都是"我把窗放在这儿了"。
+  # 用 GetNewClosure():这个处理器在 ShowDialog 的消息泵里执行,那时函数的
+  # 局部作用域已经不在栈上,不捕获就会读到 $null。
+  $form.Add_FormClosing({
+    try {
+      if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Normal) {
+        Save-RememberedGeometry $form.Left $form.Top $form.Width $form.Height
+      }
+    } catch { }
+  }.GetNewClosure())
 
   [void]$form.ShowDialog()
   if ($autoTimer) { $autoTimer.Stop() }

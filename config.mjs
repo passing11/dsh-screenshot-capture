@@ -28,8 +28,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   },
   dialog: {
     // 悬浮窗出现的位置:
-    //   "cursor" = 跟着鼠标(默认,历史行为)
-    //   "fixed"  = 每次都出现在 fixedX / fixedY 这个屏幕坐标上
+    //   "cursor"   = 跟着鼠标(默认,历史行为)
+    //   "fixed"    = 每次都出现在 fixedX / fixedY 这个屏幕坐标上
+    //   "remember" = 沿用上次关闭时的位置和大小(没记录过就退回 cursor 行为)
     positionMode: "cursor",
     // positionMode = "fixed" 时生效。单位是**屏幕像素**(多显示器虚拟桌面坐标系,
     // 主屏左上方的副屏 x 是负数,所以允许负值)。

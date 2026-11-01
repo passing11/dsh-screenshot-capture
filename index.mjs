@@ -47,7 +47,7 @@ export const Config = z.object({
   ocrApiKey: vol(z.string().default("")),
   ocrEndpoint: vol(z.string().default(DEFAULT_CONFIG.ocr.endpoint)),
   ocrPrompt: vol(z.string().default(DEFAULT_CONFIG.ocr.prompt)),
-  dialogPositionMode: vol(z.union([z.const("cursor"), z.const("fixed")]).default(DEFAULT_CONFIG.dialog.positionMode)),
+  dialogPositionMode: vol(z.union([z.const("cursor"), z.const("fixed"), z.const("remember")]).default(DEFAULT_CONFIG.dialog.positionMode)),
   dialogFixedX: vol(z.number().min(-20000).max(20000).default(DEFAULT_CONFIG.dialog.fixedX)),
   dialogFixedY: vol(z.number().min(-20000).max(20000).default(DEFAULT_CONFIG.dialog.fixedY)),
   dialogOffsetX: vol(z.number().min(-1000).max(1000).default(DEFAULT_CONFIG.dialog.offsetX)),

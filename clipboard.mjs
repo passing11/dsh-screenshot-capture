@@ -150,6 +150,10 @@ export class ClipboardWatcher extends EventEmitter {
       dupWindowMs: this.config.dupWindowMs ?? 6000,
       // 悬浮窗自动关闭秒数;0 = 一直等用户点
       autoCloseSec: this.config.dialog?.autoCloseSec ?? 0,
+      // 记住上次关闭位置时,状态文件写哪儿。必须落在 homedir 下而不是
+      // tmpdir —— 后者每个进程/每个 shell 都可能不同(见 LOCK_DIR 的注释),
+      // 而且系统清临时目录时会连位置一起清掉。
+      statePath: join(LOCK_DIR, "dialog-state.json"),
     };
     mkdirSync(this.workDir, { recursive: true });
     writeFileSync(join(this.workDir, "watcher-config.json"), JSON.stringify(flat), "utf8");
