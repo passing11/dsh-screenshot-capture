@@ -47,9 +47,15 @@ export const Config = z.object({
   ocrApiKey: vol(z.string().default("")),
   ocrEndpoint: vol(z.string().default(DEFAULT_CONFIG.ocr.endpoint)),
   ocrPrompt: vol(z.string().default(DEFAULT_CONFIG.ocr.prompt)),
+  dialogPositionMode: vol(z.union([z.const("cursor"), z.const("fixed")]).default(DEFAULT_CONFIG.dialog.positionMode)),
+  dialogFixedX: vol(z.number().min(-20000).max(20000).default(DEFAULT_CONFIG.dialog.fixedX)),
+  dialogFixedY: vol(z.number().min(-20000).max(20000).default(DEFAULT_CONFIG.dialog.fixedY)),
   dialogOffsetX: vol(z.number().min(-1000).max(1000).default(DEFAULT_CONFIG.dialog.offsetX)),
   dialogOffsetY: vol(z.number().min(-1000).max(1000).default(DEFAULT_CONFIG.dialog.offsetY)),
   dialogPreviewMaxWidth: vol(z.number().min(100).max(2000).default(DEFAULT_CONFIG.dialog.previewMaxWidth)),
+  // 固定尺寸:0 = 不固定(按内容自适应)。
+  dialogWidth: vol(z.number().min(0).max(4000).default(DEFAULT_CONFIG.dialog.width)),
+  dialogHeight: vol(z.number().min(0).max(4000).default(DEFAULT_CONFIG.dialog.height)),
   // 悬浮窗自动关闭秒数。0 = 不自动关(默认),一直等用户点。
   dialogAutoCloseSec: vol(z.number().min(0).max(3600).default(DEFAULT_CONFIG.dialog.autoCloseSec)),
 });
@@ -69,9 +75,14 @@ function toFlat(config) {
     ocrApiKey: config.ocr?.apiKey ?? "",
     ocrEndpoint: config.ocr?.endpoint,
     ocrPrompt: config.ocr?.prompt,
+    dialogPositionMode: config.dialog?.positionMode,
+    dialogFixedX: config.dialog?.fixedX,
+    dialogFixedY: config.dialog?.fixedY,
     dialogOffsetX: config.dialog?.offsetX,
     dialogOffsetY: config.dialog?.offsetY,
     dialogPreviewMaxWidth: config.dialog?.previewMaxWidth,
+    dialogWidth: config.dialog?.width,
+    dialogHeight: config.dialog?.height,
     dialogAutoCloseSec: config.dialog?.autoCloseSec,
   };
 }
@@ -134,9 +145,14 @@ function fromFlat(flat) {
   if (has(flat, "ocrApiKey")) ocr.apiKey = flat.ocrApiKey || "";
   if (has(flat, "ocrEndpoint")) ocr.endpoint = flat.ocrEndpoint;
   if (has(flat, "ocrPrompt")) ocr.prompt = flat.ocrPrompt;
+  if (has(flat, "dialogPositionMode")) dialog.positionMode = flat.dialogPositionMode;
+  if (has(flat, "dialogFixedX")) dialog.fixedX = flat.dialogFixedX;
+  if (has(flat, "dialogFixedY")) dialog.fixedY = flat.dialogFixedY;
   if (has(flat, "dialogOffsetX")) dialog.offsetX = flat.dialogOffsetX;
   if (has(flat, "dialogOffsetY")) dialog.offsetY = flat.dialogOffsetY;
   if (has(flat, "dialogPreviewMaxWidth")) dialog.previewMaxWidth = flat.dialogPreviewMaxWidth;
+  if (has(flat, "dialogWidth")) dialog.width = flat.dialogWidth;
+  if (has(flat, "dialogHeight")) dialog.height = flat.dialogHeight;
   if (has(flat, "dialogAutoCloseSec")) dialog.autoCloseSec = flat.dialogAutoCloseSec;
   if (Object.keys(ocr).length > 0) out.ocr = ocr;
   if (Object.keys(dialog).length > 0) out.dialog = dialog;
@@ -186,15 +202,26 @@ export function apply(ctx, input = {}) {
   let restartChain = Promise.resolve();
   let retryTimer = null;
   let retryCount = 0;
+  // 另一个 DSH 实例正持有监听锁:本实例静默让位,不算故障、不重试。
+  let busyLocked = false;
+  let busyTimer = null;
 
   const configKey = (cfg) => JSON.stringify({
     enabled: cfg.enabled,
     vaultPath: cfg.vaultPath,
     pollIntervalMs: cfg.pollIntervalMs,
     cooldownMs: cfg.cooldownMs,
+    // 悬浮窗的这几个参数由助手在**弹窗那一刻**读 watcher-config.json,
+    // 但助手进程只在启动时读一次 —— 所以它们变了必须重启助手才生效,
+    // 全部要进特征串(漏一个就表现为"改了设置没反应")。
+    dialogPositionMode: cfg.dialog?.positionMode,
+    dialogFixedX: cfg.dialog?.fixedX,
+    dialogFixedY: cfg.dialog?.fixedY,
     dialogOffsetX: cfg.dialog?.offsetX,
     dialogOffsetY: cfg.dialog?.offsetY,
     dialogPreviewMaxWidth: cfg.dialog?.previewMaxWidth,
+    dialogWidth: cfg.dialog?.width,
+    dialogHeight: cfg.dialog?.height,
     dialogAutoCloseSec: cfg.dialog?.autoCloseSec,
   });
 
@@ -225,7 +252,16 @@ export function apply(ctx, input = {}) {
       });
     });
     w.on("err", (ev) => ctx.logger.warn(`dsh-screenshot-capture: ${ev.msg}`));
+    // 抢锁失败:另一个 DSH 实例已经在听剪贴板了。此时**不**重试 ——
+    // 重试只会和对方抢,反而可能两边都弹。让它听着,等它退出后本实例
+    // 靠配置变化或重启来接管。
+    w.on("busy", (ev) => {
+      busyLocked = true;
+      ctx.logger.warn(`dsh-screenshot-capture: ${ev.msg}`);
+      scheduleBusyRecheck();
+    });
     w.on("ready", () => {
+      busyLocked = false;
       if (retryCount > 0) ctx.logger.info(`dsh-screenshot-capture: 监听助手第 ${retryCount} 次重试后已就绪`);
       retryCount = 0;
     });
@@ -267,6 +303,27 @@ export function apply(ctx, input = {}) {
     retryTimer.unref?.();
   };
 
+  /**
+   * 锁被别的实例占着时,每 15s 探一次:对方退出后本实例自动接管。
+   * 不用重试退避那一套 —— 这不算故障,只是等一个先来后到。
+   */
+  const scheduleBusyRecheck = () => {
+    if (disposed || busyTimer) return;
+    busyTimer = setInterval(() => {
+      if (disposed) return;
+      if (!busyLocked) { clearInterval(busyTimer); busyTimer = null; return; }
+      const cfg = liveConfig;
+      if (!cfg.enabled || !cfg.vaultPath) return;
+      restartChain = restartChain.then(async () => {
+        if (disposed || !busyLocked) return;
+        busyLocked = false;
+        watcherKey = null; // 逼它真的重起,别被特征串短路
+        startWatcher(cfg);
+      });
+    }, 15000);
+    busyTimer.unref?.();
+  };
+
   const scheduleRestart = () => {
     const cfg = liveConfig;
     const key = configKey(cfg);
@@ -289,6 +346,10 @@ export function apply(ctx, input = {}) {
     if (retryTimer) {
       clearTimeout(retryTimer);
       retryTimer = null;
+    }
+    if (busyTimer) {
+      clearInterval(busyTimer);
+      busyTimer = null;
     }
     if (watcher) {
       watcher.stop();

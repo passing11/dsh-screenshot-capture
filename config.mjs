@@ -27,9 +27,22 @@ export const DEFAULT_CONFIG = Object.freeze({
     prompt: "请识别图片中的全部文字内容,原样输出;数学公式用 LaTeX 输出。只输出识别结果,不要任何解释。",
   },
   dialog: {
+    // 悬浮窗出现的位置:
+    //   "cursor" = 跟着鼠标(默认,历史行为)
+    //   "fixed"  = 每次都出现在 fixedX / fixedY 这个屏幕坐标上
+    positionMode: "cursor",
+    // positionMode = "fixed" 时生效。单位是**屏幕像素**(多显示器虚拟桌面坐标系,
+    // 主屏左上方的副屏 x 是负数,所以允许负值)。
+    fixedX: 0,
+    fixedY: 0,
     offsetX: 16,
     offsetY: 16,
     previewMaxWidth: 320,
+    // 固定尺寸。0 = 不固定(宽度按内容算,高度按内容算)。
+    // 设了 width 时预览图按窗口宽度重新缩放;设了 height 时多出来的高度
+    // 全部给注释框(它是窗里唯一适合拉伸的控件)。
+    width: 0,
+    height: 0,
     // 悬浮窗自动关闭秒数。0 = 关掉自动关闭,一直等用户点。
     // 倒计时在你敲键盘 / 改注释 / 点窗口时重新喂满;到点等同「忽略」(copy),
     // 剪贴板原样保留、不写库。

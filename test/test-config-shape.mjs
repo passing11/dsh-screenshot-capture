@@ -23,11 +23,16 @@ assert.deepEqual(flattenConfig(flatIn), flatIn, "扁平输入应原样透传");
 const nestedIn = {
   enabled: true,
   vaultPath: "E:\\v",
-  dialog: { offsetX: 40, offsetY: 8, previewMaxWidth: 500, autoCloseSec: 12 },
+  dialog: { positionMode: "fixed", fixedX: -1200, fixedY: 40, offsetX: 40, offsetY: 8, previewMaxWidth: 500, width: 520, height: 640, autoCloseSec: 12 },
   ocr: { mode: "host", hostModel: "a/b" },
 };
 const nestedOut = flattenConfig(nestedIn);
 assert.equal(nestedOut.dialogAutoCloseSec, 12, "嵌套 input.dialog.autoCloseSec 应摊平");
+assert.equal(nestedOut.dialogPositionMode, "fixed", "嵌套 input.dialog.positionMode 应摊平");
+assert.equal(nestedOut.dialogFixedX, -1200, "副屏在主屏左边时 x 为负,不能丢符号");
+assert.equal(nestedOut.dialogFixedY, 40);
+assert.equal(nestedOut.dialogWidth, 520);
+assert.equal(nestedOut.dialogHeight, 640);
 assert.equal(nestedOut.dialogOffsetX, 40);
 assert.equal(nestedOut.dialogPreviewMaxWidth, 500);
 assert.equal(nestedOut.ocrMode, "host");
@@ -57,5 +62,43 @@ const nonDefault = Object.fromEntries(
   }),
 );
 assert.equal(nonDefault.dialogAutoCloseSec, 5, "自定义的 autoCloseSec 不能被当成默认值丢掉");
+
+/**
+ * 新字段必须进 Config schema —— 漏一个就表现为「设置页改了没反应」:
+ * 宿主按 schema 过滤写入,不在 schema 里的键会被静默丢弃。
+ */
+const { Config } = await import("../index.mjs");
+const { plain: unwrap } = await import("../config.mjs");
+const parsed = unwrap(Config({}));
+for (const key of [
+  "dialogPositionMode", "dialogFixedX", "dialogFixedY",
+  "dialogWidth", "dialogHeight",
+]) {
+  assert.ok(key in parsed, `Config 里缺少 ${key}`);
+}
+assert.equal(parsed.dialogPositionMode, "cursor", "默认应跟随鼠标(保持历史行为)");
+assert.equal(parsed.dialogWidth, 0, "宽度默认 0 = 自适应");
+assert.equal(parsed.dialogHeight, 0, "高度默认 0 = 自适应");
+
+/** 枚举外的 positionMode 必须被 schema 拒绝 */
+assert.throws(() => Config({ dialogPositionMode: "nope" }), "positionMode 应只接受 cursor/fixed");
+
+/** watcher 配置要把新字段真的传给 PowerShell 助手(漏传 = 设置页改了没效果) */
+const { ClipboardWatcher } = await import("../clipboard.mjs");
+const w = new ClipboardWatcher({
+  pollIntervalMs: 200,
+  cooldownMs: 2000,
+  dialog: { positionMode: "fixed", fixedX: -1200, fixedY: 40, offsetX: 5, offsetY: 6, previewMaxWidth: 400, width: 520, height: 640, autoCloseSec: 3 },
+});
+const written = w.writeWatcherConfig();
+assert.equal(written.positionMode, "fixed", "watcher 配置缺 positionMode");
+assert.equal(written.fixedX, -1200, "watcher 配置缺 fixedX");
+assert.equal(written.fixedY, 40, "watcher 配置缺 fixedY");
+assert.equal(written.width, 520, "watcher 配置缺 width");
+assert.equal(written.height, 640, "watcher 配置缺 height");
+assert.equal(written.previewMaxWidth, 400);
+assert.equal(written.autoCloseSec, 3);
+assert.equal(written.offsetX, 5);
+assert.equal(written.offsetY, 6);
 
 console.log("[config-shape-test] 全部通过");

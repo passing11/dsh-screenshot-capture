@@ -3,6 +3,95 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-11-01
+
+### Fixed — 一次复制弹出两个窗口 / Two dialogs for one copy
+
+用户报告「为什么一次会弹出两个窗口」。排查结果:不是同一个 watcher 重复触发,
+而是**两个 DSH 实例在同时跑**(`--profile desktop` 与 `--profile fixture-mirror`),
+两个 profile 都把本插件装成了指向同一份源码的 link,于是各自拉起一个
+`clip-dialog.ps1`。它们共用同一个 `%TEMP%\dsh-capture` 目录和同一个系统剪贴板,
+所以复制一次图,两边同时检测到,各自弹出一个内容完全相同的窗口。
+
+`clipboard.mjs` 新增单实例锁(`~/.dsh/dsh-screenshot-capture/watcher.lock`,
+内容是本进程 PID):
+
+- 用 `openSync(path, "wx")` 抢锁 —— 该标志在文件已存在时失败,是原子的,
+  不依赖「先查再写」这种有竞态的做法。
+- 抢不到时读锁里的 PID 并 `process.kill(pid, 0)` 探活:**持有者活着就让位**,
+  不 spawn 助手,只 `emit("busy")` 打一条告警;持有者已死(被强杀会留下锁文件)
+  则接管。
+- `EPERM` 视为活着 —— Windows 上对存在但无权限的进程探活会抛它,那是活的。
+- `stop()` / `stopAsync()` / 助手退出时释放锁,且**只删自己那把**
+  (删之前比对 PID),避免把刚接管的实例的锁删掉。
+
+**锁为什么放在 `~/.dsh/` 而不是 `%TEMP%`**:这是踩出来的。第一版锁放在
+`tmpdir()` 下,实测发现从 shell 里启动的 DSH 会继承那个 shell 的私有 TEMP
+(`...\Temp\dsh-win-bash-<pid>-<rand>`),两个实例算出的 `tmpdir()` 根本不是
+同一个目录,于是各锁各的,锁形同虚设 —— 跨实例验证时直接失败。`homedir()`
+(`USERPROFILE`)对所有实例都相同,才是能共享的位置。
+
+`index.mjs` 配合两件事:
+
+- 收到 `busy` 时置 `busyLocked`,**不走重试退避** —— 抢锁失败不是故障,
+  退避重试只会让两个实例反复互抢。
+- 每 15s 探一次:对方退出后本实例自动接管,不需要用户重启 DSH。
+
+新增 `test/test-single-instance.mjs`(11 个断言,已并入 `npm test`),锁住
+「第一个拿到 / 第二个让位 / 不覆盖对方 PID / 僵尸锁接管 / 损坏锁接管 /
+stop 后释放」这几条容易写错的路径。
+
+## [0.4.0] - 2026-11-01
+
+### Added — 悬浮窗可以钉在固定位置 / Pin the floating window to a fixed position
+
+新配置 `dialog.positionMode`，两档：
+
+- `cursor`（默认，保持历史行为）—— 在光标旁弹出，按 `offsetX` / `offsetY` 偏移；
+  右下放不下就翻到左上。
+- `fixed` —— 每次都出现在 `dialog.fixedX` / `dialog.fixedY` 这个**屏幕坐标**上，
+  与鼠标位置无关。多显示器下用的是虚拟桌面坐标系（副屏摆在主屏左边时 x 是负数），
+  所以定位基于 `SystemInformation.VirtualScreen` 而不是单屏的 `WorkingArea` ——
+  否则钉在副屏上的窗会被 clamp 回主屏。只有当窗口**完全落在虚拟桌面之外**时才收敛回来，
+  不因为贴边而挪动用户指定的坐标。
+
+### Added — 悬浮窗支持自定义宽度和高度 / Custom window size
+
+新配置 `dialog.width` / `dialog.height`（0 = 自适应，默认）。
+
+- 设了 `width`：预览图**等比缩放铺满**窗宽（`PictureBox` 的 `Zoom` 模式负责居中留白），
+  而不是继续按 `previewMaxWidth` 独立算然后被窗口裁掉。此时 `previewMaxWidth` 不参与。
+- 设了 `height`：多出来的高度全部给**注释框**（窗里唯一适合拉伸的控件 ——
+  拉伸预览会糊，拉伸按钮行没意义）。注释框保底 40px。
+- 尺寸给得过小时不会把控件挤爆：窗宽不低于按钮行所需宽度
+  （`pad*2 + bw*2 + gap` = 198），窗高不低于「预览 + 注释 40 + 勾选框 + 按钮行」。
+
+### Changed — 新增字段全部进 watcher 特征串 / All new fields join the restart key
+
+`configKey()` 与 `ClipboardWatcher.writeWatcherConfig()` 都补齐了 5 个新字段。
+助手只在**启动时**读一次 `watcher-config.json`，所以漏一个就表现为
+「设置页改了没反应」—— 和 2026-10-29 定位的那类 bug 同一个坑。
+
+### Tests
+
+- `test/test-dialog-fixed.ps1`（新，14 项）：进程内 `Invoke-Expression` 抠出
+  `Show-CaptureDialog` 实测 —— cursor 模式跟指针、fixed 模式钉坐标且与指针无关、
+  固定尺寸生效、控件不越界、多余高度给了注释框、0/0 回到自适应、尺寸过小时按钮仍排得下。
+  指针全程用 `$script:PointerOverride` 模拟，不动真实鼠标。
+- `test/test-dialog-layout.ps1`：源码级断言同步更新（窗宽取大改为三目写法），
+  新增「固定宽度时预览按窗宽缩放」「支持 fixed 定位」「fixed 用 VirtualScreen」三条。
+- `test/test-config-shape.mjs`：钉住 5 个新字段的摊平（含负数 `fixedX`）、
+  `Config` schema 里存在且默认值正确、枚举外 `positionMode` 被拒、
+  以及 `writeWatcherConfig()` 真的把它们写进 json。
+- `package.json` 新增 `test:window:fixed` 脚本。
+
+### Note — 一个非插件问题：剪贴板被 Electron 锁死
+
+实测期间遇到 `OpenClipboard` 一直返回错误 5（拒绝访问），owner 是
+`DeepSeek Harness` 自己的 `Chrome_MessageWindow` —— 剪贴板句柄没释放。
+这不是本插件的 bug，但会让任何剪贴板类测试（包括插件自身的监听）失效，
+重启 Harness 即恢复。写在这里是因为排查时很容易误判成插件问题。
+
 ## [0.3.1] - 2026-10-29
 
 ### Added — 可下载的安装包 / Downloadable release artifact

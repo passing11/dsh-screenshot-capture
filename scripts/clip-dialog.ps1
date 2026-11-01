@@ -48,11 +48,11 @@ function Write-Event([hashtable]$obj) {
   try { [Console]::Out.WriteLine($line); [Console]::Out.Flush() } catch {}
 }
 
-$config = @{ pollIntervalMs = 200; cooldownMs = 2000; offsetX = 16; offsetY = 16; previewMaxWidth = 320; dupWindowMs = 6000; autoCloseSec = 0 }
+$config = @{ pollIntervalMs = 200; cooldownMs = 2000; positionMode = "cursor"; fixedX = 0; fixedY = 0; offsetX = 16; offsetY = 16; previewMaxWidth = 320; width = 0; height = 0; dupWindowMs = 6000; autoCloseSec = 0 }
 if ($ConfigPath -and (Test-Path $ConfigPath)) {
   try {
     $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
-    foreach ($k in @('pollIntervalMs','cooldownMs','offsetX','offsetY','previewMaxWidth','dupWindowMs','autoCloseSec')) {
+    foreach ($k in @('pollIntervalMs','cooldownMs','positionMode','fixedX','fixedY','offsetX','offsetY','previewMaxWidth','width','height','dupWindowMs','autoCloseSec')) {
       if ($null -ne $cfg.$k) { $config[$k] = $cfg.$k }
     }
   } catch { Write-Event @{ t = "err"; msg = "config parse: $($_.Exception.Message)" } }
@@ -140,23 +140,60 @@ function Show-CaptureDialog {
   $maxW = [int]$config.previewMaxWidth
   $w = [Math]::Max(1, $img.Width)
   $h = [Math]::Max(1, $img.Height)
-  $scale = [Math]::Min(1.0, $maxW / $w)
-  $pw = [Math]::Max(160, [int]($w * $scale))
-  $ph = [Math]::Max(100, [int]($h * $scale))
 
   $bw = 88; $bh = 32; $pad = 8; $gap = 6
-  # 窗宽取「按钮行」与「预览图」两者较宽的那个。
-  # 曾经只按按钮行算(三键时代 198…不对,292),预览图按 previewMaxWidth 独立算,
-  # 两者谁也不管谁 —— 图比窗宽就横向被裁掉一截(2026-10-29 去掉「复制截图」后
-  # 从 292 缩到 198,320 宽的预览直接缺了一半才发现)。
+  # 按钮行占用的最小宽度:窗宽再怎么被固定值压,也不能压到按钮排不下。
   $rowW = $pad * 2 + $bw * 2 + $gap
-  $totalW = [Math]::Max($rowW, $pw + $pad * 2)
+  $fixedW = [int]$config.width
+  $fixedH = [int]$config.height
+
+  # --- 宽度 ---------------------------------------------------------------
+  # 固定宽度时,预览框直接铺满可用宽度 —— PictureBox 用 Zoom 模式,内部按
+  # 等比缩放显示,所以框比图宽也不会变形,只是小图会居中留白(比缩在左上角
+  # 一片空白好看)。框高度仍按图片原始宽高比算。
+  # 自适应宽度时维持老行为:只缩不放,小图保底 160x100。
+  $availW = if ($fixedW -gt 0) { [Math]::Max(1, $fixedW - $pad * 2) } else { $maxW }
+  $scale = [Math]::Min(1.0, [double]$availW / [double]$w)
+  if ($fixedW -gt 0) {
+    $pw = $availW
+    $ph = [Math]::Max(1, [int]($h * ([double]$availW / [double]$w)))
+  } else {
+    $pw = [Math]::Max(160, [int]($w * $scale))
+    $ph = [Math]::Max(100, [int]($h * $scale))
+  }
+
+  # 固定高度时,预览框不能把注释框挤没:先给它留出 40px 的注释区,
+  # 剩下的垂直空间才是预览上限(按宽高比反算框宽,保持铺满效果)。
+  if ($fixedH -gt 0) {
+    $chrome = 8 + 8 + 40 + 6 + 24 + 10 + $bh + $pad  # 预览以外所有固定开销
+    $maxPh = [Math]::Max(1, $fixedH - $chrome)
+    if ($ph -gt $maxPh) {
+      $ph = $maxPh
+      $pw = [Math]::Max(1, [int]($w * ([double]$ph / [double]$h)))
+    }
+  }
+
+  # 窗宽取「按钮行」与「预览图」两者较宽的那个;固定宽度时以固定值为准(但不低于按钮行)。
+  $totalW = if ($fixedW -gt 0) { [Math]::Max($rowW, $fixedW) } else { [Math]::Max($rowW, $pw + $pad * 2) }
   $noteW = $totalW - $pad * 2
   $noteH = 60
   $noteY = 8 + $ph + 8
   $chkY = $noteY + $noteH + 6
   $rowY = $chkY + 24 + 10
   $totalH = $rowY + $bh + $pad
+
+  # --- 高度 ---------------------------------------------------------------
+  # 固定高度时,多出来的高度全部给注释框 —— 它是窗里唯一适合拉伸的控件
+  # (预览图拉伸会糊,按钮行拉伸没意义)。注释框自身保底 40px;
+  # 若用户给的固定高度连"注释框 40 + 勾选框 + 按钮行"都放不下,以内容高度为准。
+  if ($fixedH -gt 0) {
+    $minH = $noteY + 40 + 6 + 24 + 10 + $bh + $pad
+    $target = [Math]::Max($fixedH, $minH)
+    $noteH = [Math]::Max(40, $noteH + ($target - $totalH))
+    $chkY = $noteY + $noteH + 6
+    $rowY = $chkY + 24 + 10
+    $totalH = $rowY + $bh + $pad
+  }
 
   $pic = New-Object System.Windows.Forms.PictureBox
   $pic.Width = $pw
@@ -250,15 +287,40 @@ function Show-CaptureDialog {
     $form.Add_Shown({ $autoTimer.Start() }.GetNewClosure())
   }
 
-  $cursor = Get-PointerPosition
-  $screen = [System.Windows.Forms.Screen]::FromPoint($cursor)
-  $wa = $screen.WorkingArea
-  $x = $cursor.X + [int]$config.offsetX
-  $y = $cursor.Y + [int]$config.offsetY
-  if ($x + $totalW -gt $wa.Right)  { $x = $cursor.X - $totalW - [int]$config.offsetX }
-  if ($y + $totalH -gt $wa.Bottom) { $y = $cursor.Y - $totalH - [int]$config.offsetY }
-  $x = [Math]::Max($wa.Left, $x)
-  $y = [Math]::Max($wa.Top, $y)
+  # --- 位置 ---------------------------------------------------------------
+  # 两种模式:
+  #   cursor(默认):跟着鼠标,按 offsetX/offsetY 摆在光标右下方;放不下就翻到
+  #                 左上侧(历史行为,原样保留)。
+  #   fixed        :每次都出现在 fixedX/fixedY 这个**屏幕坐标**上,与鼠标无关。
+  #                 多显示器下坐标系是整个虚拟桌面(副屏在主屏左边时 x 为负),
+  #                 所以这里用 VirtualScreen 而不是某个 Screen 的 WorkingArea ——
+  #                 否则钉在副屏上的窗会被 clamp 回主屏。
+  # 两种模式都保留"别跑出屏幕"的收敛,但 fixed 模式下若用户明确钉在副屏,
+  # 只要该点在虚拟桌面内就按用户说的摆。
+  $totalW = [int]$totalW
+  $totalH = [int]$totalH
+  if ([string]$config.positionMode -eq "fixed") {
+    $x = [int]$config.fixedX
+    $y = [int]$config.fixedY
+    $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    # 只在"完全落在虚拟桌面之外"时才拉回来,不因为贴边而挪动用户指定的坐标。
+    if ($x + $totalW -le $vs.Left -or $x -ge $vs.Right) {
+      $x = [Math]::Max($vs.Left, [Math]::Min($x, $vs.Right - $totalW))
+    }
+    if ($y + $totalH -le $vs.Top -or $y -ge $vs.Bottom) {
+      $y = [Math]::Max($vs.Top, [Math]::Min($y, $vs.Bottom - $totalH))
+    }
+  } else {
+    $cursor = Get-PointerPosition
+    $screen = [System.Windows.Forms.Screen]::FromPoint($cursor)
+    $wa = $screen.WorkingArea
+    $x = $cursor.X + [int]$config.offsetX
+    $y = $cursor.Y + [int]$config.offsetY
+    if ($x + $totalW -gt $wa.Right)  { $x = $cursor.X - $totalW - [int]$config.offsetX }
+    if ($y + $totalH -gt $wa.Bottom) { $y = $cursor.Y - $totalH - [int]$config.offsetY }
+    $x = [Math]::Max($wa.Left, $x)
+    $y = [Math]::Max($wa.Top, $y)
+  }
   $form.Location = New-Object System.Drawing.Point($x, $y)
 
   [void]$form.ShowDialog()

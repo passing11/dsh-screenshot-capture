@@ -35,9 +35,19 @@ window.__ModuleLoader__.load({
       ocrHostModelHint: "留空 = 跟随 DSH 当前默认模型;填模型 id 可强制指定",
       ocrFallbackHint: "宿主模型不可用时自动回落通义千问(key 从环境变量 DASHSCOPE_API_KEY 读取,无需在此配置)",
       dialog: "悬浮窗",
+      dialogPositionMode: "出现位置",
+      dialogPositionModeHint: "「跟随鼠标」在光标旁弹出;「固定坐标」每次都出现在下面填的位置,和鼠标无关。",
+      dialogPositionCursor: "跟随鼠标",
+      dialogPositionFixed: "固定坐标",
+      dialogFixedX: "固定 X (px)",
+      dialogFixedY: "固定 Y (px)",
+      dialogWidth: "宽度 (px,0=自适应)",
+      dialogHeight: "高度 (px,0=自适应)",
+      dialogSizeHint: "填 0 表示按内容自适应。设了宽度时预览图会等比缩放到窗宽;设了高度时多出来的空间给注释框。",
+      dialogPreviewMaxWidth: "预览最大宽度 (px)",
+      dialogPreviewMaxWidthHint: "仅在宽度填 0(自适应)时生效。",
       dialogOffsetX: "横向偏移 (px)",
       dialogOffsetY: "纵向偏移 (px)",
-      dialogPreviewMaxWidth: "预览最大宽度 (px)",
       dialogAutoCloseSec: "自动关闭 (秒,0=不关)",
       dialogAutoCloseHint: "到点自动收起,等同「忽略」:剪贴板原样保留、不写库。敲键盘 / 改注释 / 点窗口会重新计时。",
     };
@@ -63,9 +73,19 @@ window.__ModuleLoader__.load({
       ocrHostModelHint: "Leave empty to follow the current DSH default model; set a model id to pin one",
       ocrFallbackHint: "Falls back to Tongyi Qianwen when the host model is unavailable (key read from DASHSCOPE_API_KEY; not configured here)",
       dialog: "Floating window",
+      dialogPositionMode: "Position",
+      dialogPositionModeHint: "\"Follow cursor\" pops up next to the pointer; \"Fixed\" always appears at the coordinates below, regardless of the pointer.",
+      dialogPositionCursor: "Follow cursor",
+      dialogPositionFixed: "Fixed coordinates",
+      dialogFixedX: "Fixed X (px)",
+      dialogFixedY: "Fixed Y (px)",
+      dialogWidth: "Width (px, 0 = auto)",
+      dialogHeight: "Height (px, 0 = auto)",
+      dialogSizeHint: "0 means size to content. With a fixed width the preview scales to fit it; with a fixed height the extra space goes to the note box.",
+      dialogPreviewMaxWidth: "Preview max width (px)",
+      dialogPreviewMaxWidthHint: "Only used when width is 0 (auto).",
       dialogOffsetX: "Horizontal offset (px)",
       dialogOffsetY: "Vertical offset (px)",
-      dialogPreviewMaxWidth: "Preview max width (px)",
       dialogAutoCloseSec: "Auto-close (s, 0 = never)",
       dialogAutoCloseHint: "Collapses on its own when time is up — same as ignoring: clipboard untouched, nothing stored. Typing, editing the note or clicking the window restarts the countdown.",
     };
@@ -204,18 +224,49 @@ window.__ModuleLoader__.load({
         ]),
         h("div", { className: "scc-group" }, [
           h("h3", null, t("dialog")),
+          Field({
+            label: t("dialogPositionMode"),
+            hint: t("dialogPositionModeHint"),
+            children: h("select", { value: v.dialogPositionMode || "cursor", onChange: (e) => save("dialogPositionMode", e.target.value) }, [
+              h("option", { value: "cursor" }, t("dialogPositionCursor")),
+              h("option", { value: "fixed" }, t("dialogPositionFixed")),
+            ]),
+          }),
+          (v.dialogPositionMode || "cursor") === "fixed"
+            ? h("div", { className: "scc-row" }, [
+                Field({
+                  label: t("dialogFixedX"),
+                  children: h(NumberInput, { value: v.dialogFixedX, min: -20000, max: 20000, onCommit: (n) => save("dialogFixedX", n) }),
+                }),
+                Field({
+                  label: t("dialogFixedY"),
+                  children: h(NumberInput, { value: v.dialogFixedY, min: -20000, max: 20000, onCommit: (n) => save("dialogFixedY", n) }),
+                }),
+              ])
+            : h("div", { className: "scc-row" }, [
+                Field({
+                  label: t("dialogOffsetX"),
+                  children: h(NumberInput, { value: v.dialogOffsetX, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetX", n) }),
+                }),
+                Field({
+                  label: t("dialogOffsetY"),
+                  children: h(NumberInput, { value: v.dialogOffsetY, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetY", n) }),
+                }),
+              ]),
           h("div", { className: "scc-row" }, [
             Field({
-              label: t("dialogOffsetX"),
-              children: h(NumberInput, { value: v.dialogOffsetX, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetX", n) }),
+              label: t("dialogWidth"),
+              hint: t("dialogSizeHint"),
+              children: h(NumberInput, { value: v.dialogWidth, min: 0, max: 4000, onCommit: (n) => save("dialogWidth", n) }),
             }),
             Field({
-              label: t("dialogOffsetY"),
-              children: h(NumberInput, { value: v.dialogOffsetY, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetY", n) }),
+              label: t("dialogHeight"),
+              children: h(NumberInput, { value: v.dialogHeight, min: 0, max: 4000, onCommit: (n) => save("dialogHeight", n) }),
             }),
           ]),
           Field({
             label: t("dialogPreviewMaxWidth"),
+            hint: t("dialogPreviewMaxWidthHint"),
             children: h(NumberInput, { value: v.dialogPreviewMaxWidth, min: 100, max: 2000, onCommit: (n) => save("dialogPreviewMaxWidth", n) }),
           }),
           Field({
