@@ -54,25 +54,29 @@ DSH 设置 →「截图入库」图形配置界面:
 ## 安装 / Install (DSH plugin)
 
 > ⚠️ **不要装 npm 上的 `dsh-screenshot-capture`** —— 那个包属于原作者 `wangzhanchao883`，
-> 停在 **0.2.4**，不含本 fork 的自动关闭 / 悬停冻结 / 双按钮 / OCR 修复。请用下面的方式之一。
+> 停在 **0.2.4**，不含本 fork 的自动关闭 / 悬停冻结 / 双按钮 / OCR 修复 / 记住窗口位置 /
+> 布局贴合图片。请用下面的方式之一，装完认准版本号 **0.4.7**。
 
-**方式一：直接从 GitHub 仓库安装（推荐）**
+**方式一：直接从 GitHub 仓库安装（推荐，无需下载）**
 
 ```sh
 dsh plugin --profile desktop add github:passing11/dsh-screenshot-capture
 ```
 
-**方式二：下载 `.tgz` 安装包**
+这会把仓库默认分支的最新代码装进 profile。首次装需要联网克隆，几十秒。
 
-下载地址（v0.3.1）：
+**方式二：下载 `.tgz` 安装包（换电脑、离线拷贝时用这个）**
 
-<https://github.com/passing11/dsh-screenshot-capture/releases/download/v0.3.1/dsh-screenshot-capture-0.3.1.tgz>
+下载地址（v0.4.7）：
+
+<https://github.com/passing11/dsh-screenshot-capture/releases/download/v0.4.7/dsh-screenshot-capture-0.4.7.tgz>
 
 ```sh
-dsh plugin --profile desktop add "E:/下载/dsh-screenshot-capture-0.3.1.tgz"
+dsh plugin --profile desktop add "E:/下载/dsh-screenshot-capture-0.4.7.tgz"
 ```
 
 Windows 上必须用带盘符的完整路径（`/tmp/...` 这类 MSYS 路径 pnpm 认不出）。
+`.tgz` 是自包含的，拷到 U 盘带到没网的机器也能装。
 
 **方式三：本地目录（开发调试）**
 
@@ -82,12 +86,44 @@ dsh plugin --profile desktop add "E:/dsh插件生成/dsh-screenshot-capture"
 
 这种装法会在 profile 的 `node_modules` 里建符号链接，改源码即生效，适合自己改代码。
 
-> 装完用 `dsh plugin --profile desktop list | grep screenshot` 确认版本是 **0.3.1**。
+> 装完确认版本：`dsh plugin --profile desktop list`，输出里应有
+> `└── dsh-screenshot-capture@0.4.7`。
 
-重启 DSH 后生效。剪贴板监听与悬浮窗由插件 host 端自动拉起(需要 DSH 运行中)。
+**`dsh` 命令在哪**
 
-> 首次使用请先在 DSH 设置 →「截图入库」里配置你的 Obsidian 库路径。OCR 默认就能用(走宿主模型)。
-> 未配置 `vaultPath` 时采集功能会自动停用并告警。
+它是 DSH 桌面版自带的 CLI，在 **cmd / PowerShell** 里直接可用。如果提示找不到，
+用全路径：
+
+```
+"D:\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop list
+```
+
+（路径按你的实际安装位置调整。Git Bash 里认不出 `.cmd`，请换 cmd 或 PowerShell。）
+
+**装完要做的事**
+
+1. **重启 DSH**（不是刷新页面）—— 插件的 host 端要重新拉起，剪贴板监听和悬浮窗才起来。
+2. 打开 DSH 设置 →「截图入库」，配置你的 Obsidian 库路径。OCR 默认就能用（走宿主模型）。
+   未配置库路径时采集功能会自动停用并告警。
+3. 截一张图试试：应该弹出悬浮窗，里面是刚截的图。
+
+**从旧版本升级**
+
+直接再跑一次 `add` 即可，pnpm 会替换成新版本：
+
+```sh
+dsh plugin --profile desktop add github:passing11/dsh-screenshot-capture
+```
+
+配置（`cordis.patch.yml` 里的 `dsh-screenshot-capture` 段）会保留，不会被覆盖。
+
+**卸载**
+
+```sh
+dsh plugin --profile desktop remove dsh-screenshot-capture
+```
+
+`~/.dsh/dsh-screenshot-capture/` 下的窗口位置记录和单实例锁不会被删，想彻底清理可以手动删掉这个目录。
 
 ## 配置 / Configuration
 
