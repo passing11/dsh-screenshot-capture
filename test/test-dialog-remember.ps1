@@ -48,13 +48,14 @@ function Get-FnSource([string]$text, [string]$name) {
   return $text.Substring($start, $i - $start + 1)
 }
 
-# Show-CaptureDialog 依赖这几个东西:三个几何函数 + $tempDir + $config
+# Show-CaptureDialog 依赖这几个东西:三个几何函数 + 布局函数 + $tempDir + $config
 $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ('dsc-remember-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $script:tempDir -Force | Out-Null
 Invoke-Expression (Get-FnSource $src 'Get-PointerPosition')
 Invoke-Expression (Get-FnSource $src 'Get-StatePath')
 Invoke-Expression (Get-FnSource $src 'Get-RememberedGeometry')
 Invoke-Expression (Get-FnSource $src 'Save-RememberedGeometry')
+Invoke-Expression (Get-FnSource $src 'Get-DialogLayout')
 Invoke-Expression (Get-FnSource $src 'Show-CaptureDialog')
 
 $fail = 0

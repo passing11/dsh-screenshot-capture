@@ -43,6 +43,8 @@ function Get-FnSource([string]$text, [string]$name) {
   }
   return $text.Substring($start, $i - $start + 1)
 }
+$layoutFn = Get-FnSource $src 'Get-DialogLayout'
+Invoke-Expression $layoutFn
 $body = Get-FnSource $src 'Show-CaptureDialog'
 $ptrFn = Get-FnSource $src 'Get-PointerPosition'
 Invoke-Expression $ptrFn
@@ -150,9 +152,12 @@ foreach ($b in $buttons) {
 }
 
 # 源码层:窗宽必须是「按钮行」与「预览图」两者取大(固定宽度分支以固定值为准)。
-Check '窗宽取按钮行与预览图较宽者' ($body.Contains('$totalW = if ($fixedW -gt 0) { [Math]::Max($rowW, $fixedW) } else { [Math]::Max($rowW, $pw + $pad * 2) }')) '缺 totalW 取大的写法'
-# 固定宽度时预览必须按窗宽重算,不能仍按 previewMaxWidth 独立算(否则又被裁)
-Check '固定宽度时预览按窗宽缩放' ($body.Contains('$availW = if ($fixedW -gt 0) { [Math]::Max(1, $fixedW - $pad * 2) } else { $maxW }')) '缺固定宽度下的预览重算'
+Check '窗宽取按钮行与预览图较宽者' ($body.Contains('$totalW = if ($fixedW -gt 0) { [Math]::Max($rowW, $fixedW) } else { [Math]::Max($rowW, $maxW + $pad * 2) }')) '缺 totalW 取大的写法'
+# 0.4.7 起预览框尺寸一律由 Get-DialogLayout 按图片宽高比算 —— 框和图片比例
+# 一致,Zoom 模式就不会出现灰边(灰边正是"图没完全展开"的观感)。
+# 老断言检查的是"固定宽度时按窗宽重算"那段内联算式,现在整体搬进纯函数了。
+Check '初始布局走 Get-DialogLayout' ($body.Contains('$layout = Get-DialogLayout')) '初始布局没有走 Get-DialogLayout'
+Check '拖动改大小时复用同一套布局' ($body.Contains('$L = Get-DialogLayout -ClientW $cw')) 'relayout 没复用 Get-DialogLayout'
 # 位置:两种模式都要有,且 fixed 模式用 VirtualScreen(多显示器负坐标)
 Check '支持 fixed 定位模式' ($body.Contains('[string]$config.positionMode -eq "fixed"')) '缺 fixed 分支'
 Check 'fixed 定位用 VirtualScreen' ($body.Contains('[System.Windows.Forms.SystemInformation]::VirtualScreen')) 'fixed 分支应基于虚拟桌面而非单屏 WorkingArea'

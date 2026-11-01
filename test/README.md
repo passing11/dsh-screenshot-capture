@@ -9,6 +9,7 @@ committed sample image (`sample.png`) and write into scratch `test-vault` /
 ```sh
 npm test                      # all JS suites (no key, no DSH needed)
 npm run test:window:layout    # floating dialog layout (in-process, no clipboard)
+npm run test:window:layout:calc  # Get-DialogLayout unit tests: aspect ratio, no letterbox
 npm run test:window:resize    # dialog resize + relayout (in-process, no clipboard)
 npm run test:window:fixed     # fixed position / fixed size
 npm run test:window           # auto-close countdown
@@ -32,6 +33,7 @@ npm run test:ocr              # live OCR against Qwen — needs DASHSCOPE_API_KE
 | `test-single-instance.mjs` | one watcher per machine (lock file, stale locks) |
 | `test-settings-reload.mjs` | `settings/document-updated` hot reload, incl. changing back to a default value |
 | `test-dialog-layout.ps1` | initial dialog layout: preview not clipped, everything inside the window |
+| `test-dialog-layout-calc.ps1` | `Get-DialogLayout` unit tests: the preview box always matches the image aspect ratio (no letterbox bars), leftover height goes to the comment box, extreme aspect ratios and zero-size images |
 | `test-dialog-resize.ps1` | **resizable border** (`WS_THICKFRAME` on the real handle), minimum size, and the relayout after dragging bigger *and* smaller |
 | `test-dialog-fixed.ps1` | fixed position / fixed size, and that content still fits |
 | `test-dialog-remember.ps1` | `remember` mode: state file round-trip, fallback to cursor when the record is missing / off-screen / corrupt, and `MinimumSize` clamping |

@@ -44,6 +44,8 @@ function Get-FnSource([string]$text, [string]$name) {
   }
   return $text.Substring($start, $i - $start + 1)
 }
+$layoutFn = Get-FnSource $src 'Get-DialogLayout'
+Invoke-Expression $layoutFn
 $body = Get-FnSource $src 'Show-CaptureDialog'
 $ptrFn = Get-FnSource $src 'Get-PointerPosition'
 Invoke-Expression $ptrFn

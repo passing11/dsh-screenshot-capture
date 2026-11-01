@@ -90,6 +90,8 @@ function Get-FnSource([string]$text, [string]$name) {
 }
 
 # Show-CaptureDialog 依赖 Get-PointerPosition(指针入口),两个都要抠出来
+$layoutFn = Get-FnSource $src 'Get-DialogLayout'
+Invoke-Expression $layoutFn
 $body = Get-FnSource $src 'Show-CaptureDialog'
 $ptrFn = Get-FnSource $src 'Get-PointerPosition'
 $script:PointerOverride = $null

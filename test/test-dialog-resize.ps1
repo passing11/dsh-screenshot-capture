@@ -61,6 +61,8 @@ function Get-FnSource([string]$text, [string]$name) {
   }
   return $text.Substring($start, $i - $start + 1)
 }
+$layoutFn = Get-FnSource $src 'Get-DialogLayout'
+Invoke-Expression $layoutFn
 $body = Get-FnSource $src 'Show-CaptureDialog'
 $ptrFn = Get-FnSource $src 'Get-PointerPosition'
 Invoke-Expression $ptrFn
@@ -181,7 +183,10 @@ Check '拖大后预览图变高' ($aPic.h -gt $bPic0.h) "拖前 $($bPic0.h) → 
 
 # ---- 3. 注释框 / 勾选框 / 按钮行保持原尺寸(不被拉伸糊掉,也不越界)----
 Check '拖大后注释框宽度跟随(与预览对齐)' ($aNote.w -eq $aPic.w) "注释 $($aNote.w) vs 预览 $($aPic.w)"
-Check '拖大后注释框高度不变' ($aNote.h -eq $bNote0.h) "拖前 $($bNote0.h) → 拖后 $($aNote.h)"
+# 0.4.7 起富余的纵向空间**全部给注释框**:预览框贴着图片宽高比(没有灰边),
+# 剩下的高度由注释框吃掉。老断言"注释框高度不变"钉的是"预览框被拉高、
+# 里面出现灰边"的旧行为 —— 那正是用户报的"图片没完全展开"。
+Check '拖大后富余高度给了注释框(而不是让预览框留灰边)' ($aNote.h -ge $bNote0.h) "拖前 $($bNote0.h) → 拖后 $($aNote.h)"
 Check '拖大后勾选框尺寸不变' (($aChk.w -eq $bChk0.w) -and ($aChk.h -eq $bChk0.h)) "拖前 $($bChk0.w)x$($bChk0.h) → 拖后 $($aChk.w)x$($aChk.h)"
 Check '拖大后按钮还是两个' ($aButtons.Count -eq 2) "实际 $($aButtons.Count)"
 

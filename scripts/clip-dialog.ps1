@@ -251,6 +251,70 @@ function Save-RememberedGeometry([int]$x, [int]$y, [int]$w, [int]$h) {
   } catch { }
 }
 
+# --- 弹窗内的布局计算 -------------------------------------------------------
+#
+# 单独抽成纯函数:给定客户区大小和图片原始尺寸,算出预览框该多大、注释框
+# 该多高、各自摆在哪。抽出来有两个好处 —— 能脱离真实弹窗单独跑测试,
+# 而且"用户拖边框改大小"和"窗开着时换了张比例不同的图"能共用同一套算法。
+#
+# 核心约束:**预览框必须和图片同宽高比**。PictureBox 是 Zoom 模式,框比图
+# 胖或瘦都会出现灰边(letterbox)—— 而灰边正是"图没完全展开"的观感:
+# 用户看到的是一张图缩在一大片空白中间。所以框的尺寸一律按图片宽高比反算,
+# 多出来的纵向空间全给注释框(窗里唯一适合纵向拉伸的控件)。
+function Get-DialogLayout {
+  param(
+    [int]$ClientW,
+    [int]$ClientH,
+    [int]$ImageW,
+    [int]$ImageH,
+    [int]$Pad = 8,
+    [int]$Gap = 6,
+    [int]$BtnW = 88,
+    [int]$BtnH = 32,
+    [int]$ChkH = 24,
+    [int]$MinPicH = 40,
+    [int]$MinNoteH = 60
+  )
+  $ImageW = [Math]::Max(1, $ImageW)
+  $ImageH = [Math]::Max(1, $ImageH)
+  $aspect = [double]$ImageW / [double]$ImageH
+
+  $innerW = [Math]::Max(1, $ClientW - $Pad * 2)
+  # 预览图与注释框**之外**的所有纵向开销:顶部内边距 + 图与注释框的间距 +
+  # 注释框与勾选框的间距 + 勾选框 + 勾选框与按钮行的间距 + 按钮行 + 下边距
+  $chrome = $Pad * 3 + $Gap + $ChkH + 10 + $BtnH
+  # 预览图 + 注释框能共用的纵向空间
+  $avail = [Math]::Max($MinPicH + $MinNoteH, $ClientH - $chrome)
+
+  # 先按"图铺满窗宽"算框高
+  $picW = $innerW
+  $picH = [Math]::Max(1, [int][Math]::Round($innerW / $aspect))
+
+  if ($picH + $MinNoteH -gt $avail) {
+    # 高度不够:图按剩余空间缩,宽度跟着比例收窄(于是图水平居中,两侧留边)
+    $picH = [Math]::Max($MinPicH, $avail - $MinNoteH)
+    $picW = [Math]::Max(1, [int][Math]::Round($picH * $aspect))
+    if ($picW -gt $innerW) { $picW = $innerW }
+    $noteH = $MinNoteH
+  } else {
+    # 高度有富余:图保持满宽(框高恰好等于图高,没有灰边),富余全给注释框
+    $noteH = $avail - $picH
+  }
+
+  $picX = $Pad + [int](($innerW - $picW) / 2)
+  $noteY = $Pad + $picH + $Pad
+  $chkY = $noteY + $noteH + $Gap
+  $rowY = $chkY + $ChkH + 10
+
+  return @{
+    picX = $picX; picY = $Pad; picW = $picW; picH = $picH
+    noteX = $Pad; noteY = $noteY; noteW = $innerW; noteH = $noteH
+    chkX = $Pad; chkY = $chkY
+    rowX = $Pad; rowY = $rowY
+    innerW = $innerW
+  }
+}
+
 function Show-CaptureDialog {
   param([string]$ImagePath, [int]$AutoCloseMs = 0, [int]$Seq = 0)
   $form = New-Object System.Windows.Forms.Form
@@ -284,53 +348,35 @@ function Show-CaptureDialog {
   $fixedW = [int]$config.width
   $fixedH = [int]$config.height
 
-  # --- 宽度 ---------------------------------------------------------------
-  # 固定宽度时,预览框直接铺满可用宽度 —— PictureBox 用 Zoom 模式,内部按
-  # 等比缩放显示,所以框比图宽也不会变形,只是小图会居中留白(比缩在左上角
-  # 一片空白好看)。框高度仍按图片原始宽高比算。
-  # 自适应宽度时维持老行为:只缩不放,小图保底 160x100。
-  $availW = if ($fixedW -gt 0) { [Math]::Max(1, $fixedW - $pad * 2) } else { $maxW }
-  $scale = [Math]::Min(1.0, [double]$availW / [double]$w)
-  if ($fixedW -gt 0) {
-    $pw = $availW
-    $ph = [Math]::Max(1, [int]($h * ([double]$availW / [double]$w)))
-  } else {
-    $pw = [Math]::Max(160, [int]($w * $scale))
-    $ph = [Math]::Max(100, [int]($h * $scale))
+  # --- 初始尺寸 ---------------------------------------------------------------
+  # 宽度:固定值优先(但不低于按钮行),否则按 previewMaxWidth。
+  $totalW = if ($fixedW -gt 0) { [Math]::Max($rowW, $fixedW) } else { [Math]::Max($rowW, $maxW + $pad * 2) }
+
+  # 自适应宽度时**不放大**小图:100x100 的图标铺到 320 宽只会变糊。
+  # 窗宽跟着图片收窄(仍不低于按钮行)。固定宽度时按用户要求铺满。
+  if ($fixedW -le 0 -and $w -lt ($totalW - $pad * 2)) {
+    $totalW = [Math]::Max($rowW, $w + $pad * 2)
   }
 
-  # 固定高度时,预览框不能把注释框挤没:先给它留出 40px 的注释区,
-  # 剩下的垂直空间才是预览上限(按宽高比反算框宽,保持铺满效果)。
-  if ($fixedH -gt 0) {
-    $chrome = 8 + 8 + 40 + 6 + 24 + 10 + $bh + $pad  # 预览以外所有固定开销
-    $maxPh = [Math]::Max(1, $fixedH - $chrome)
-    if ($ph -gt $maxPh) {
-      $ph = $maxPh
-      $pw = [Math]::Max(1, [int]($w * ([double]$ph / [double]$h)))
-    }
-  }
+  # 高度:按"预览图铺满窗宽 + 注释框 60px"算出自然高度。
+  # 关键是这里算的是**图片真实高度**(innerW / 宽高比) —— 老代码算的是
+  # "按 maxW 缩放后的高度",两者在固定宽度下数值相同,但框的尺寸一旦和
+  # 图片比例脱钩,PictureBox 的 Zoom 模式就会在框里留灰边。
+  $innerW0 = [Math]::Max(1, $totalW - $pad * 2)
+  $chrome0 = $pad * 3 + $gap + 24 + 10 + $bh
+  $picH0 = [Math]::Max(1, [int][Math]::Round($innerW0 * ([double]$h / [double]$w)))
+  $naturalH = $chrome0 + $picH0 + 60
 
-  # 窗宽取「按钮行」与「预览图」两者较宽的那个;固定宽度时以固定值为准(但不低于按钮行)。
-  $totalW = if ($fixedW -gt 0) { [Math]::Max($rowW, $fixedW) } else { [Math]::Max($rowW, $pw + $pad * 2) }
-  $noteW = $totalW - $pad * 2
-  $noteH = 60
-  $noteY = 8 + $ph + 8
-  $chkY = $noteY + $noteH + 6
-  $rowY = $chkY + 24 + 10
-  $totalH = $rowY + $bh + $pad
+  # 固定高度以固定值为准,但不能矮到连"预览 40 + 注释 60"都放不下。
+  $totalH = if ($fixedH -gt 0) { [Math]::Max($fixedH, $chrome0 + 40 + 60) } else { $naturalH }
 
-  # --- 高度 ---------------------------------------------------------------
-  # 固定高度时,多出来的高度全部给注释框 —— 它是窗里唯一适合拉伸的控件
-  # (预览图拉伸会糊,按钮行拉伸没意义)。注释框自身保底 40px;
-  # 若用户给的固定高度连"注释框 40 + 勾选框 + 按钮行"都放不下,以内容高度为准。
-  if ($fixedH -gt 0) {
-    $minH = $noteY + 40 + 6 + 24 + 10 + $bh + $pad
-    $target = [Math]::Max($fixedH, $minH)
-    $noteH = [Math]::Max(40, $noteH + ($target - $totalH))
-    $chkY = $noteY + $noteH + 6
-    $rowY = $chkY + 24 + 10
-    $totalH = $rowY + $bh + $pad
-  }
+  $layout = Get-DialogLayout -ClientW $totalW -ClientH $totalH -ImageW $w -ImageH $h `
+    -Pad $pad -Gap $gap -BtnW $bw -BtnH $bh
+  $pw = $layout.picW; $ph = $layout.picH
+  $noteW = $layout.noteW; $noteH = $layout.noteH
+  $noteY = $layout.noteY
+  $chkY = $layout.chkY
+  $rowY = $layout.rowY
 
   $pic = New-Object System.Windows.Forms.PictureBox
   $pic.Width = $pw
@@ -377,33 +423,41 @@ function Show-CaptureDialog {
   $form.Controls.AddRange(@($pic, $noteBox, $chkKey, $bDoc, $bImg))
   $form.ClientSize = New-Object System.Drawing.Size($totalW, $totalH)
 
+  # --- 窗口状态 ---------------------------------------------------------------
+  # 必须先建 $state 再挂 $relayout:GetNewClosure() 只捕获**创建闭包那一刻**
+  # 已经存在的变量,晚于它定义的 $state 会永远读到 $null。
+  $state = @{ left = $AutoCloseMs; autoClosed = $false; hovering = $false }
+  # 窗口开着时又来了新截图 → 原地换图,不再弹第二个窗。
+  #   path      : 当前窗里这张图的临时路径(关窗后由调用方负责删)
+  #   image     : 当前这张图本身,换图时要 Dispose 旧的
+  #   seq       : 剪贴板序列号,用来判断"有没有新的截图"
+  #   refreshes : 换过几次(测试与日志用)
+  $state.path = $ImagePath
+  $state.image = $img
+  $state.seq = $Seq
+  $state.refreshes = 0
+
   # --- 拖动边框改大小后的重新布局 ---------------------------------------------
   # 只有**预览图**跟着窗口伸缩:PicBox 是 Zoom 模式(等比缩放,放大不糊),
   # 拉大窗口正好是为了看清截图细节。注释框、勾选框、按钮行保持各自尺寸。
   #
-  # 注释框高度用**当前值**而不是构造时的 $noteH:配置里填了 dialogHeight 时,
-  # 初始布局会把多出来的高度给注释框(它是窗里唯一适合纵向拉伸的控件)。
-  # 若这里写死 $noteH,用户一拖窗注释框就"缩回去"了,看着像闪一下。
-  # 同时给它一个上限 —— 窗被拖矮时必须让注释框跟着缩,否则会顶出窗外。
+  # 预览框尺寸一律由 Get-DialogLayout 按**当前图**的宽高比算 —— 框和图片比例
+  # 一致,Zoom 模式下就不会出现灰边(灰边正是"图没完全展开"的观感)。
+  # 用 $state.image 而不是构造时的 $img:窗开着时可能换过图,比例未必一样。
   $relayout = {
+    $curImg = $state.image
     $cw = [int]$form.ClientSize.Width
     $ch = [int]$form.ClientSize.Height
-    $innerW = [Math]::Max(1, $cw - $pad * 2)
-    # 预览图以下(注释框 + 勾选框 + 按钮行 + 间距)是固定开销
-    $chromeBelow = 6 + 24 + 10 + $bh + $pad
-    # 注释框最多能占多高:至少给预览图留 40px
-    $noteMax = [Math]::Max(40, $ch - 16 - 40 - $chromeBelow)
-    $useNoteH = [Math]::Min([Math]::Max(40, [int]$noteBox.Height), $noteMax)
-    $newPicH = [Math]::Max(40, $ch - 16 - $useNoteH - $chromeBelow)
-    $pic.Size = New-Object System.Drawing.Size($innerW, $newPicH)
-    $newNoteY = 8 + $newPicH + 8
-    $noteBox.Location = New-Object System.Drawing.Point($pad, $newNoteY)
-    $noteBox.Size = New-Object System.Drawing.Size($innerW, $useNoteH)
-    $newChkY = $newNoteY + $useNoteH + 6
-    $chkKey.Location = New-Object System.Drawing.Point($pad, $newChkY)
-    $newRowY = $newChkY + 24 + 10
-    $bDoc.Location = New-Object System.Drawing.Point($pad, $newRowY)
-    $bImg.Location = New-Object System.Drawing.Point(($pad + $bw + $gap), $newRowY)
+    if ($null -eq $curImg -or $cw -le 0 -or $ch -le 0) { return }
+    $L = Get-DialogLayout -ClientW $cw -ClientH $ch -ImageW $curImg.Width -ImageH $curImg.Height `
+      -Pad $pad -Gap $gap -BtnW $bw -BtnH $bh
+    $pic.Location = New-Object System.Drawing.Point($L.picX, $L.picY)
+    $pic.Size = New-Object System.Drawing.Size($L.picW, $L.picH)
+    $noteBox.Location = New-Object System.Drawing.Point($L.noteX, $L.noteY)
+    $noteBox.Size = New-Object System.Drawing.Size($L.noteW, $L.noteH)
+    $chkKey.Location = New-Object System.Drawing.Point($L.chkX, $L.chkY)
+    $bDoc.Location = New-Object System.Drawing.Point($L.rowX, $L.rowY)
+    $bImg.Location = New-Object System.Drawing.Point(($L.rowX + $bw + $gap), $L.rowY)
   }.GetNewClosure()
   $form.Add_Resize($relayout)
 
@@ -420,16 +474,6 @@ function Show-CaptureDialog {
   # 所以刚弹出时指针在窗**外**,不移动的话照常倒计时。
   #
   # 敲键盘 / 改注释 / 勾重点 / 点窗口也把倒计时喂满,免得写到一半窗没了。
-  $state = @{ left = $AutoCloseMs; autoClosed = $false; hovering = $false }
-  # 窗口开着时又来了新截图 → 原地换图,不再弹第二个窗。
-  #   path      : 当前窗里这张图的临时路径(关窗后由调用方负责删)
-  #   image     : 当前这张图本身,换图时要 Dispose 旧的
-  #   seq       : 剪贴板序列号,用来判断"有没有新的截图"
-  #   refreshes : 换过几次(测试与日志用)
-  $state.path = $ImagePath
-  $state.image = $img
-  $state.seq = $Seq
-  $state.refreshes = 0
   if ($AutoCloseMs -gt 0) {
     $autoTimer = New-Object System.Windows.Forms.Timer
     $autoTimer.Interval = 250
