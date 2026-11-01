@@ -110,6 +110,84 @@ function Remember-Signature($sig, $now) {
   $script:recentSignatures = @(@{ sig = $sig; at = $now }) + @($recentSignatures | Select-Object -First 4)
 }
 
+# 剪贴板序列号的唯一入口。
+#
+# 和 Get-PointerPosition 同样的理由留一个测试接缝:真剪贴板在这台机器上被
+# 浏览器长期占着(OpenClipboard 连续 8 次失败),测试没法靠它验证刷新逻辑。
+# 测试把 $script:SeqOverride 设成一个返回整数的 scriptblock,就能**模拟**
+# "用户又截了一张图",完全不动系统剪贴板。
+$script:SeqOverride = $null
+function Get-ClipboardSeq {
+  if ($null -ne $script:SeqOverride) { return [int](& $script:SeqOverride) }
+  return [int][WinClip]::GetClipboardSequenceNumber()
+}
+
+# --- 剪贴板读取与临时落盘 ---------------------------------------------------
+# 主循环和「窗口开着时盯新截图」都要这两步,抽出来免得两份实现走偏。
+# 剪贴板是全局资源,别的程序(浏览器、截图工具)随时可能占着它:
+# ContainsImage / GetImage 都可能抛,一律当"这会儿没图"处理,不中断监听。
+
+# 读当前剪贴板里的图片,没有或读不到就返回 $null。**调用方负责 Dispose**。
+# $script:ClipboardImageOverride 是同一个测试接缝:返回一张现成的位图,
+# 就能在完全不碰系统剪贴板的前提下驱动刷新。
+$script:ClipboardImageOverride = $null
+function Read-ClipboardImage {
+  if ($null -ne $script:ClipboardImageOverride) {
+    return (& $script:ClipboardImageOverride)
+  }
+  try {
+    if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { return $null }
+  } catch { return $null }
+  try { return [System.Windows.Forms.Clipboard]::GetImage() } catch { return $null }
+}
+
+# 把图存成临时 png,返回路径;失败返回 $null。
+# 同一毫秒里连存两张会撞名(时间戳只到毫秒),撞了就顺延 _2 / _3。
+function Save-ClipboardImageToTemp([System.Drawing.Image]$img) {
+  $ts = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+  $pngPath = Join-Path $tempDir ("clip_{0}.png" -f $ts)
+  $n = 1
+  while (Test-Path $pngPath) {
+    $n++
+    $pngPath = Join-Path $tempDir ("clip_{0}_{1}.png" -f $ts, $n)
+  }
+  try {
+    $img.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    return $pngPath
+  } catch {
+    Write-Event @{ t = "err"; msg = "save: $($_.Exception.Message)" }
+    return $null
+  }
+}
+
+# 把窗里的预览换成新图,并把旧的那张临时图删掉。
+#
+# 抽成函数是为了能测:它只动 $pic 和 $state,完全不碰剪贴板,所以测试可以
+# 拿一张现成的位图直接调,不用去抢那块被浏览器长期占着的剪贴板。
+#
+# 只换图、不动窗口大小:窗可能已经被拖过、或者按 remember 还原过,按新图的
+# 尺寸去改窗会把用户刚摆好的位置和大小冲掉。PicBox 是 Zoom 模式,比例不同
+# 就居中留白,不会变形。
+function Set-DialogImage {
+  param($state, $pic, [System.Drawing.Image]$newImg, [string]$newPath)
+  $oldImg = $pic.Image
+  $pic.Image = $newImg
+  $pic.Refresh()
+  # 旧图要 Dispose,否则每换一张漏一份 GDI+ 句柄。ReferenceEquals 判一下:
+  # 极端情况下新图就是旧图本身,那就别把它释放了。
+  if (($null -ne $oldImg) -and (-not [object]::ReferenceEquals($oldImg, $newImg))) {
+    try { $oldImg.Dispose() } catch { }
+  }
+  $oldPath = $state.path
+  $state.path = $newPath
+  $state.image = $newImg
+  # 旧的那张临时图不再需要 —— 用户明确说了「原来的截图不用」。
+  if ($oldPath -and ($oldPath -ne $newPath)) {
+    try { Remove-Item -LiteralPath $oldPath -Force -ErrorAction SilentlyContinue } catch { }
+  }
+  $state.refreshes = [int]$state.refreshes + 1
+}
+
 # 指针位置的唯一入口。
 #
 # 默认读真实光标。自动化测试可以临时把 $script:PointerOverride 设成一个返回
@@ -174,10 +252,11 @@ function Save-RememberedGeometry([int]$x, [int]$y, [int]$w, [int]$h) {
 }
 
 function Show-CaptureDialog {
-  param([string]$ImagePath, [int]$AutoCloseMs = 0)
+  param([string]$ImagePath, [int]$AutoCloseMs = 0, [int]$Seq = 0)
   $form = New-Object System.Windows.Forms.Form
   $img = $null
   $autoTimer = $null
+  $refreshTimer = $null
   try {
   $form.Text = "截图入库"
   # SizableToolWindow:保留"工具窗"外观(无任务栏图标、窄标题栏),但**四边可拖动改大小**。
@@ -342,6 +421,15 @@ function Show-CaptureDialog {
   #
   # 敲键盘 / 改注释 / 勾重点 / 点窗口也把倒计时喂满,免得写到一半窗没了。
   $state = @{ left = $AutoCloseMs; autoClosed = $false; hovering = $false }
+  # 窗口开着时又来了新截图 → 原地换图,不再弹第二个窗。
+  #   path      : 当前窗里这张图的临时路径(关窗后由调用方负责删)
+  #   image     : 当前这张图本身,换图时要 Dispose 旧的
+  #   seq       : 剪贴板序列号,用来判断"有没有新的截图"
+  #   refreshes : 换过几次(测试与日志用)
+  $state.path = $ImagePath
+  $state.image = $img
+  $state.seq = $Seq
+  $state.refreshes = 0
   if ($AutoCloseMs -gt 0) {
     $autoTimer = New-Object System.Windows.Forms.Timer
     $autoTimer.Interval = 250
@@ -374,6 +462,54 @@ function Show-CaptureDialog {
     $chkKey.Add_CheckedChanged($bump)
     $form.Add_Shown({ $autoTimer.Start() }.GetNewClosure())
   }
+
+  # --- 窗口开着时盯新截图 -----------------------------------------------------
+  # ShowDialog 是**模态**调用:它跑自己的消息泵,主循环那圈 while 在它返回之前
+  # 一步都不走。所以窗口开着的时候,剪贴板其实没人看 —— 用户连截两张,
+  # 第二张会被 cooldown 吞掉、或者干脆等到窗关了才处理。
+  #
+  # 这里挂一个 WinForms Timer 在**模态消息泵内部**轮询:发现剪贴板序列号变了、
+  # 而且新内容确实是图,就地把预览换成新图,并删掉上一张临时图(用户要求
+  # 「原来的截图不用」)。不弹第二个窗、不动窗口位置和大小 —— 用户可能已经把
+  # 它拖到顺手的地方了。
+  #
+  # 为什么不在主循环里改:那要求把 ShowDialog 换成 Show + Application.Run,
+  # 会连带改掉"窗关掉之后才拿到返回值"的整套控制流,风险大得多。
+  #
+  # 去重仍然走同一套 Test-DuplicateCapture:Windows 截图工具会在几秒内把同一张
+  # 屏推两次,那种情况不该刷新(否则用户会觉得窗在闪)。
+  $refreshTimer = New-Object System.Windows.Forms.Timer
+  $refreshTimer.Interval = [Math]::Max(120, [int]$config.pollIntervalMs)
+  $refreshTimer.Add_Tick({
+    try {
+      $seqNow = 0
+      try { $seqNow = Get-ClipboardSeq } catch { return }
+      if ($seqNow -eq $state.seq) { return }   # 剪贴板没动过
+      $state.seq = $seqNow
+      $newImg = Read-ClipboardImage
+      if ($null -eq $newImg) { return }        # 换成文字/文件了,窗里这张留着
+      $now = [DateTime]::Now
+      $sig = Get-ImageSignature $newImg
+      if (Test-DuplicateCapture $sig $now) {
+        $newImg.Dispose()
+        return
+      }
+      Remember-Signature $sig $now
+      $newPath = Save-ClipboardImageToTemp $newImg
+      if ($null -eq $newPath) {
+        $newImg.Dispose()
+        return
+      }
+      Set-DialogImage -state $state -pic $pic -newImg $newImg -newPath $newPath
+      # 换过图就重置自动关闭倒计时:用户刚截了新图,正要看这一张。
+      if ($AutoCloseMs -gt 0) { $state.left = $AutoCloseMs }
+      Write-Event @{ t = "refresh"; path = $newPath; seq = $seqNow }
+    } catch {
+      # 定时器里抛异常会把整个消息泵带走,一律吞掉并记账。
+      Write-Event @{ t = "err"; msg = "refresh: $($_.Exception.Message)" }
+    }
+  }.GetNewClosure())
+  $form.Add_Shown({ $refreshTimer.Start() }.GetNewClosure())
 
   # --- 位置 ---------------------------------------------------------------
   # 三种模式:
@@ -437,25 +573,39 @@ function Show-CaptureDialog {
 
   [void]$form.ShowDialog()
   if ($autoTimer) { $autoTimer.Stop() }
+  if ($null -ne $refreshTimer) { $refreshTimer.Stop() }
   $action = if ($form.Tag) { $form.Tag.ToString() } else { "ignore" }
   $note = $noteBox.Text.Trim()
   $isKey = [bool]$chkKey.Checked
-  return @{ action = $action; note = $note; isKey = $isKey; autoClosed = [bool]$state.autoClosed }
+  # path 是**最终**显示的那张:窗口开着时换过图的话,它已经不是传进来的 $ImagePath 了。
+  # 调用方要拿它写 choice 事件,否则存进库的是第一张、用户看到的是最后一张。
+  return @{
+    action = $action; note = $note; isKey = $isKey
+    autoClosed = [bool]$state.autoClosed
+    path = $state.path
+    refreshes = [int]$state.refreshes
+  }
   } finally {
     if ($null -ne $autoTimer) { $autoTimer.Dispose() }
+    if ($null -ne $refreshTimer) { $refreshTimer.Dispose() }
+    # 换过图的话,$img 早在 Set-DialogImage 里释放过了;这里要释放的是
+    # 窗里**当前**那张(两者相同时只释放一次)。
+    if ($null -ne $state -and $null -ne $state.image -and (-not [object]::ReferenceEquals($state.image, $img))) {
+      try { $state.image.Dispose() } catch { }
+    }
     if ($null -ne $form) { $form.Dispose() }
     if ($null -ne $img) { $img.Dispose() }
   }
 }
 
 Write-Event @{ t = "ready" }
-$lastSeq = [WinClip]::GetClipboardSequenceNumber()
+$lastSeq = Get-ClipboardSeq
 $lastHandled = [DateTime]::Now
 
 while ($true) {
   Start-Sleep -Milliseconds ([int]$config.pollIntervalMs)
   $seq = 0
-  try { $seq = [WinClip]::GetClipboardSequenceNumber() } catch { continue }
+  try { $seq = Get-ClipboardSeq } catch { continue }
   if ($seq -eq $lastSeq) { continue }
   $lastSeq = $seq
   $now = [DateTime]::Now
@@ -472,16 +622,9 @@ while ($true) {
   }
   Remember-Signature $sig $now
   $lastHandled = $now
-  $ts = Get-Date -Format "yyyyMMdd_HHmmss_fff"
-  $pngPath = Join-Path $tempDir ("clip_{0}.png" -f $ts)
-  try {
-    $img.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
-  } catch {
-    $img.Dispose()
-    Write-Event @{ t = "err"; msg = "save: $($_.Exception.Message)" }
-    continue
-  }
+  $pngPath = Save-ClipboardImageToTemp $img
   $img.Dispose()
+  if ($null -eq $pngPath) { continue }
   Write-Event @{ t = "img"; path = $pngPath; seq = $seq }
 
   if ($AutoAction) {
@@ -490,11 +633,20 @@ while ($true) {
     continue
   }
 
-  $res = @{ action = "ignore"; note = ""; isKey = $false; autoClosed = $false }
+  $res = @{ action = "ignore"; note = ""; isKey = $false; autoClosed = $false; path = $pngPath; refreshes = 0 }
   $autoCloseMs = [int](($config.autoCloseSec * 1000))
-  try { $res = Show-CaptureDialog -ImagePath $pngPath -AutoCloseMs $autoCloseMs } catch {
+  try { $res = Show-CaptureDialog -ImagePath $pngPath -AutoCloseMs $autoCloseMs -Seq $seq } catch {
     Write-Event @{ t = "err"; msg = "dialog: $($_.Exception.Message)" }
   }
-  Write-Event @{ t = "choice"; action = $res.action; path = $pngPath; note = $res.note; isKey = $res.isKey; autoClosed = $res.autoClosed }
+  # 窗开着时换过图的话,$res.path 是**最后那张**,不是 $pngPath。
+  # 存库得按用户真正看到的那张来,否则存进去的和眼前的对不上。
+  # 换图时 Set-DialogImage 已经删掉被替掉的那几张,这里只补刀。
+  if ($res.path -and ($res.path -ne $pngPath)) {
+    try { Remove-Item -LiteralPath $pngPath -Force -ErrorAction SilentlyContinue } catch { }
+  }
+  $choicePath = if ($res.path) { $res.path } else { $pngPath }
+  Write-Event @{ t = "choice"; action = $res.action; path = $choicePath; note = $res.note; isKey = $res.isKey; autoClosed = $res.autoClosed }
+  # 主循环也要跟上:窗里已经消化掉的那几次刷新,别在这儿又当成新图弹一遍。
+  try { $lastSeq = Get-ClipboardSeq } catch { }
   if ($Once) { break }
 }

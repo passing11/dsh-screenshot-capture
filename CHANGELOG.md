@@ -3,6 +3,67 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-11-01
+
+### Changed — 窗口开着时又截图,原地换图 / Refresh the preview instead of stacking dialogs
+
+**需求**:在窗口弹出期间又截了一张图,希望窗里换成新图,**原来那张不要了**。
+
+**根因**:`Show-CaptureDialog` 用的是 `ShowDialog()` —— 这是**模态**调用,它跑
+自己的消息泵,主循环那圈 `while` 在它返回之前一步都不走。所以窗口开着的时候
+剪贴板其实没人看:用户连截两张,第二张要么被 `cooldownMs` 吞掉,要么一直等到
+窗关掉之后才处理,表现成"截了没反应,过一会儿才弹出第二个窗"。
+
+**改动**:
+
+1. **`scripts/clip-dialog.ps1`** — 在模态消息泵内部挂一个
+   `System.Windows.Forms.Timer`,按 `pollIntervalMs` 轮询剪贴板序列号。序列号变了
+   且新内容确实是图,就地把预览换成新图。
+   - 新增 `Read-ClipboardImage` / `Save-ClipboardImageToTemp` / `Set-DialogImage`
+     三个函数(主循环和刷新定时器共用,免得两份实现走偏)。
+   - `Show-CaptureDialog` 多收一个 `-Seq`,返回 `path`(最终显示的那张)和
+     `refreshes`(换过几次)。
+   - 主循环按返回的 `path` 写 `choice` 事件,并把被替掉的临时图删掉。
+   - 新增事件 `{"t":"refresh","path":"...","seq":123}`。
+
+**几个不那么显然的决定**:
+
+- **为什么不改成 `Show()` + `Application.Run`**:那样确实能在主循环里统一处理
+  剪贴板,但要连带改掉"窗关掉之后才拿到返回值"的整套控制流 —— `ShowDialog`
+  返回时 `$form.Tag` 就是用户的按钮选择,改成 `Show` 之后这套要重写,风险比
+  加一个定时器大得多。而且用户拖窗、改注释时主循环插进来处理截图,更容易出
+  竞态。
+- **换图不动窗口大小**。窗可能已经被拖过、或者按 `remember` 还原过,按新图
+  尺寸去改会把用户刚摆好的位置和大小冲掉。`PictureBox` 是 `Zoom` 模式,比例
+  不同就居中留白,不会变形。
+- **旧图要 `Dispose`,但同一张不能 Dispose 两次**。换图时漏掉旧图的
+  `Dispose` 会每换一张漏一份 GDI+ 句柄;而用 `ReferenceEquals` 兜一下是因为
+  极端情况下新旧可能就是同一个对象,那时候释放了就等于把窗里那张弄死。
+- **去重仍然生效**。Windows 截图工具会在几秒内把同一张屏推两次(实测 1px
+  之差、间隔 3s),那种情况不该刷新 —— 否则用户会觉得窗在闪。
+- **换图重置自动关闭倒计时**。刚截了新图正要细看,这时候倒计时到点把窗关掉
+  是在跟人抢手。
+- **刷新定时器里的一切都包在 try/catch 里**。定时器回调抛异常会把整个消息泵
+  带走 —— 窗还在,但所有按钮和倒计时全死了。
+- **`cooldownMs` 在窗内不生效**。那个是主循环用来防抖的(两次弹窗之间至少隔
+  多久);窗里刷新是用户明确的新动作,不该被它挡住。
+
+**测试**:新增 `test/test-dialog-refresh.ps1`(45 项断言),10 个场景:换图后
+预览与状态都指向新图 / 旧的临时文件被删 / 换图不改预览框尺寸 / 新旧同一张时
+不 Dispose 也不删文件 / `state.path` 为空时换图不炸 / 临时图落盘与撞名顺延 /
+读剪贴板不抛异常 / **把定时器的 Tick 处理器原文抠出来直接驱动**(序列号没变
+不换图、剪贴板变成文字时保留原图、真来新图才换、同色重复图被去重、Tick 内部
+抛异常不外泄且记进日志) / 源码层检查定时器的类型与挂载位置 / 主循环按返回的
+`path` 写 `choice`。
+
+**为什么这个测试不碰真剪贴板**:这台机器上 Chrome 长期占着剪贴板
+(`OpenClipboard` 连续 8 次失败),靠真剪贴板弹窗的端到端测试一律 SKIP。所以
+`Set-DialogImage` 被设计成只依赖传入的控件和 `$tempDir` 的纯函数,而剪贴板的
+两个读取点(`Get-ClipboardSequenceNumber` / `ContainsImage`+`GetImage`)各留了
+一个 `$script:*Override` 接缝 —— 测试用脚本块模拟"用户又截了一张图",既覆盖
+真正容易错的部分(句柄释放、删旧文件、不动尺寸、去重、异常隔离),又不依赖
+任何全局资源。
+
 ## [0.4.4] - 2026-11-01
 
 ### Added — 记住上次关闭时的位置和大小 / Remember where the window was left
