@@ -1,6 +1,6 @@
 {
   "name": "dsh-screenshot-capture",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Point-and-shoot screenshot capture for DeepSeek Harness: clipboard watcher + system floating window (comment & key-point, copy/save-doc/save-image) + zero-config OCR through the host's own multimodal model (Tongyi Qianwen fallback) + Obsidian per-day merging + evening AI organization. 指哪拍哪 · 截图即存:剪贴板监听 + 鼠标位置系统级悬浮窗 + 用宿主大模型零配置识别(可回落通义千问) + Obsidian 按天合并 + 晚间 AI 整理打双链",
   "type": "module",
   "main": "index.mjs",
@@ -54,6 +54,8 @@
     "test:window": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-autoclose-dialog.ps1",
     "test:window:hover": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-autoclose-hover.ps1",
     "test:window:layout": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-dialog-layout.ps1",
+    "test:window:resize": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-dialog-resize.ps1",
+    "test:window:resize:live": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-live-resize.ps1",
     "test:window:fixed": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-dialog-fixed.ps1",
     "test:window:live": "powershell -NoProfile -ExecutionPolicy Bypass -File test/test-live-fixed.ps1"
   },

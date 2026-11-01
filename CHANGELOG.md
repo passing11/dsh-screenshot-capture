@@ -3,6 +3,52 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-11-01
+
+### Added — 悬浮窗可以拖动边框改大小 / Resizable capture dialog
+
+**需求**:窗口尺寸原先只能在设置页里填 `宽度`/`高度` 两个数字,想临时放大看清
+截图细节得去改配置、保存、等 watcher 重启。要能在窗口上直接拖。
+
+**改动**(全部在 `scripts/clip-dialog.ps1`):
+
+1. `FormBorderStyle` 从 `FixedToolWindow` 改为 **`SizableToolWindow`** —— 保留
+   工具窗外观(无任务栏图标、窄标题栏),但四边可拖。
+2. 加 `MinimumSize = (220, 240)` —— 别让人把窗拖成一条缝,否则里面的按钮
+   再也点不到。高度按布局算:预览图以外固定开销 156px + 预览至少 40px。
+3. 新增 `$relayout` 脚本块挂在 `$form.Add_Resize(...)` 上:拖动时**只有预览图
+   跟着伸缩**(PictureBox 是 Zoom 模式,等比缩放不糊,拉大正是为了看清细节),
+   注释框宽度跟随预览、高度保持;勾选框与按钮行只跟着纵向平移。
+
+**注意一处容易写错的地方**:注释框高度取的是**当前值** `$noteBox.Height`
+而不是构造时的 `$noteH`。配置里填了 `dialogHeight` 时初始布局会把多出来的
+高度给注释框(它是窗里唯一适合纵向拉伸的控件),若 resize 里写死 `$noteH`,
+用户一拖窗注释框就"缩回去",看着像闪了一下。同时给它上限 `$noteMax`,窗被
+拖矮时必须让注释框跟着缩,否则会顶出窗外。
+
+**测试**:新增 `test/test-dialog-resize.ps1`(30 项断言)—— 进程内抠出
+`Show-CaptureDialog` 跑起来,读初始快照 → 拖大(+260×+180)读第二份 →
+拖到最小读第三份,分别断言边框样式、最小尺寸、预览图确实变大、注释框/勾选框
+尺寸不变、所有控件在窗内、纵向堆叠不重叠、按钮行完整落在窗内。
+
+其中一条是**句柄级**的:光有 `FormBorderStyle = SizableToolWindow` 这个托管
+属性不算数,得看窗口句柄上真的有 `WS_THICKFRAME`(0x00040000) —— 属性对了而
+样式位没对,界面上就是"看着像能拖,一拖纹丝不动"。用 `$f.Handle` 读
+`GetWindowLong(GWL_STYLE)`,不经过剪贴板。
+
+另附 `test/test-live-resize.ps1`(真实链路:spawn 助手 → 剪贴板塞图 → 弹窗 →
+`SetWindowPos` 改大小 → `GetWindowRect` 复测),但它依赖剪贴板可用;
+Chrome 等程序常年独占剪贴板时只会打 SKIP,不算失败。
+
+**踩坑 1**:`MinimumSize` 约束的是 `Size`,不是 `ClientSize` —— 测试里用
+`$f.ClientSize = 80,80` 模拟"拖到最小"会**原样接受**(断言直接失败),必须设
+`$f.Size`。真实拖动时是系统按 `MinimumSize` 挡边框,所以设 `Size` 才等价。
+
+**踩坑 2**:改 `scripts/clip-dialog.ps1` 时**必须保留 UTF-8 BOM**。这个文件
+带 BOM,PowerShell 才按 UTF-8 读;BOM 一丢就回落到系统 ANSI(GBK),中文注释
+全变乱码、`ParseFile` 直接报「表达式或语句中包含意外的标记」。编辑后务必用
+`[System.Management.Automation.Language.Parser]::ParseFile(...)` 复核一遍。
+
 ## [0.4.2] - 2026-11-01
 
 ### Fixed — 设置页「出现位置」选了固定坐标却不生效 / Position mode never persisted

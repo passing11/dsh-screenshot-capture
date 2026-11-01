@@ -128,13 +128,19 @@ function Show-CaptureDialog {
   $autoTimer = $null
   try {
   $form.Text = "截图入库"
-  $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+  # SizableToolWindow:保留"工具窗"外观(无任务栏图标、窄标题栏),但**四边可拖动改大小**。
+  # 早先是 FixedToolWindow,尺寸只能在设置页里填数字,想临时放大看细节就得去改配置。
+  $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::SizableToolWindow
   $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
   $form.TopMost = $true
   $form.ShowInTaskbar = $false
   $form.KeyPreview = $true
   $form.MaximizeBox = $false
   $form.MinimizeBox = $false
+  # 可调整大小时给个下限,别让人把窗拖成一条缝(里面的按钮就再也点不到了)。
+  # 高度 240 是按布局算的:预览图以外固定开销 156px(见下面 $relayout),
+  # 预览至少留 40px → 200px 才不挤;再留点余量。
+  $form.MinimumSize = New-Object System.Drawing.Size(220, 240)
 
   $img = [System.Drawing.Image]::FromFile($ImagePath)
   $maxW = [int]$config.previewMaxWidth
@@ -239,6 +245,36 @@ function Show-CaptureDialog {
 
   $form.Controls.AddRange(@($pic, $noteBox, $chkKey, $bDoc, $bImg))
   $form.ClientSize = New-Object System.Drawing.Size($totalW, $totalH)
+
+  # --- 拖动边框改大小后的重新布局 ---------------------------------------------
+  # 只有**预览图**跟着窗口伸缩:PicBox 是 Zoom 模式(等比缩放,放大不糊),
+  # 拉大窗口正好是为了看清截图细节。注释框、勾选框、按钮行保持各自尺寸。
+  #
+  # 注释框高度用**当前值**而不是构造时的 $noteH:配置里填了 dialogHeight 时,
+  # 初始布局会把多出来的高度给注释框(它是窗里唯一适合纵向拉伸的控件)。
+  # 若这里写死 $noteH,用户一拖窗注释框就"缩回去"了,看着像闪一下。
+  # 同时给它一个上限 —— 窗被拖矮时必须让注释框跟着缩,否则会顶出窗外。
+  $relayout = {
+    $cw = [int]$form.ClientSize.Width
+    $ch = [int]$form.ClientSize.Height
+    $innerW = [Math]::Max(1, $cw - $pad * 2)
+    # 预览图以下(注释框 + 勾选框 + 按钮行 + 间距)是固定开销
+    $chromeBelow = 6 + 24 + 10 + $bh + $pad
+    # 注释框最多能占多高:至少给预览图留 40px
+    $noteMax = [Math]::Max(40, $ch - 16 - 40 - $chromeBelow)
+    $useNoteH = [Math]::Min([Math]::Max(40, [int]$noteBox.Height), $noteMax)
+    $newPicH = [Math]::Max(40, $ch - 16 - $useNoteH - $chromeBelow)
+    $pic.Size = New-Object System.Drawing.Size($innerW, $newPicH)
+    $newNoteY = 8 + $newPicH + 8
+    $noteBox.Location = New-Object System.Drawing.Point($pad, $newNoteY)
+    $noteBox.Size = New-Object System.Drawing.Size($innerW, $useNoteH)
+    $newChkY = $newNoteY + $useNoteH + 6
+    $chkKey.Location = New-Object System.Drawing.Point($pad, $newChkY)
+    $newRowY = $newChkY + 24 + 10
+    $bDoc.Location = New-Object System.Drawing.Point($pad, $newRowY)
+    $bImg.Location = New-Object System.Drawing.Point(($pad + $bw + $gap), $newRowY)
+  }.GetNewClosure()
+  $form.Add_Resize($relayout)
 
   # --- 自动关闭 ---------------------------------------------------------------
   # 到点自己关窗,等同「忽略」(和 Esc 一样):剪贴板原样保留、不写库、不弹下一层。
