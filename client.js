@@ -20,6 +20,7 @@ window.__ModuleLoader__.load({
       unavailable: "配置面板不可用(设置服务未挂载)。请直接编辑配置 JSON 文件。",
       saved: "已保存",
       error: "保存失败:",
+      rejected: "宿主拒绝了这次修改(配置未变)",
       general: "通用",
       enabled: "启用剪贴板监听",
       enabledHint: "关闭后不再监听剪贴板,悬浮窗也不会弹出",
@@ -58,6 +59,7 @@ window.__ModuleLoader__.load({
       unavailable: "Configuration panel unavailable (settings service not mounted). Edit the config JSON file directly instead.",
       saved: "Saved",
       error: "Save failed:",
+      rejected: "the host rejected this change (config unchanged)",
       general: "General",
       enabled: "Enable clipboard watching",
       enabledHint: "When off, clipboard watching and the floating window are disabled",
@@ -101,8 +103,14 @@ window.__ModuleLoader__.load({
       ".scc-switch{display:flex;align-items:center;gap:8px;margin-bottom:6px}",
       ".scc-switch input{accent-color:var(--dsw-alias-state-business-primary)}",
       ".scc-status{font-size:12px;color:var(--dsw-alias-label-tertiary);min-height:16px}",
+      ".scc-status-bad{color:var(--dsw-alias-state-error-primary)}",
       ".scc-row{display:flex;gap:12px}",
       ".scc-row .scc-field{flex:1}",
+      ".scc-seg{display:inline-flex;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;overflow:hidden}",
+      ".scc-seg-btn{height:30px;padding:0 14px;border:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}",
+      ".scc-seg-btn+.scc-seg-btn{border-left:1px solid var(--dsw-alias-border-l2)}",
+      ".scc-seg-btn:hover{background:var(--dsw-alias-bg-layer-2)}",
+      ".scc-seg-on,.scc-seg-on:hover{background:var(--dsw-alias-state-business-primary);color:#fff}",
     ].join("");
 
     /** 一行标签 + 控件 + 提示 */
@@ -153,6 +161,35 @@ window.__ModuleLoader__.load({
       });
     }
 
+    /**
+     * 分段选择(单选按钮组)。
+     *
+     * 这里**故意不用 `<select>`**:设置页最初用的就是 select,结果「出现位置」
+     * 选了「固定坐标」却存不进去 —— 其余几个数字框都能存,唯独这一个不行。
+     * 与其去猜宿主渲染层对 select 的合成事件怎么处理,不如换成最原始的一组
+     * radio:每个按钮各自带一个 onClick,事件源和目标都是它自己,没有中间层。
+     */
+    function Segmented({ value, options, onSelect }) {
+      return h(
+        "div",
+        { className: "scc-seg" },
+        options.map((opt) =>
+          h(
+            "button",
+            {
+              key: opt.value,
+              type: "button",
+              className: opt.value === value ? "scc-seg-btn scc-seg-on" : "scc-seg-btn",
+              onClick: () => {
+                if (opt.value !== value) onSelect(opt.value);
+              },
+            },
+            opt.label,
+          ),
+        ),
+      );
+    }
+
     /** 设置页:绑定 settings 命名空间,展示并保存配置 */
     function ConfigSection({ scope, t }) {
       const [snap, setSnap] = useState(() => scope.getSnapshot());
@@ -162,15 +199,48 @@ window.__ModuleLoader__.load({
       useEffect(() => () => {
         if (statusTimer.current) clearTimeout(statusTimer.current);
       }, []);
-      const flash = (msg) => {
-        setStatus(msg);
+      const flash = (msg, bad = false) => {
+        setStatus(bad ? `__bad__${msg}` : msg);
         if (statusTimer.current) clearTimeout(statusTimer.current);
-        statusTimer.current = setTimeout(() => setStatus(""), 2500);
+        statusTimer.current = setTimeout(() => setStatus(""), 4000);
       };
+      /**
+       * 保存一个字段。
+       *
+       * `scope.set()` 返回的是**布尔值** —— Host 拒绝时返回 `false`,只有传输层
+       * 出错才会 reject。以前这里只写了 `.then(() => flash("已保存"))`,于是
+       * **失败也报「已保存」**:用户以为存上了,配置其实没变(「出现位置」选固定
+       * 坐标不生效就是这么来的)。现在显式检查返回值。
+       *
+       * 被拒时重试一次:Host 的 `write` 会拿 `expectedRevision` 和当前 revision
+       * 比对,不一致就抛 `SETTINGS_CONFLICT`。而 revision 的种子里含
+       * `fiber.uid` —— **插件每重载一次 revision 就 +1**,客户端镜像随即过期。
+       * 控制器在拒绝后会自己 `mirror.load()` 把 revision 拉新,所以紧接着再写
+       * 一次就能成功。不重试的话,用户得手动再点一遍才有反应。
+       */
       const save = (field, v) => {
-        Promise.resolve(scope.set(field, v))
-          .then(() => flash(t("saved")))
-          .catch((err) => flash(`${t("error")} ${err && err.message ? err.message : String(err)}`));
+        const attempt = (retry) => {
+          Promise.resolve(scope.set(field, v))
+            .then((ok) => {
+              if (ok !== false) {
+                flash(t("saved"));
+                return;
+              }
+              if (retry) {
+                attempt(false);
+                return;
+              }
+              flash(`${t("error")} ${t("rejected")}`, true);
+            })
+            .catch((err) => {
+              if (retry) {
+                attempt(false);
+                return;
+              }
+              flash(`${t("error")} ${err && err.message ? err.message : String(err)}`, true);
+            });
+        };
+        attempt(true);
       };
 
       if (snap.status === "loading") return h("p", { className: "scc-status" }, t("loading"));
@@ -210,10 +280,14 @@ window.__ModuleLoader__.load({
           h("h3", null, t("ocr")),
           Field({
             label: t("ocrMode"),
-            children: h("select", { value: v.ocrMode || "host", onChange: (e) => save("ocrMode", e.target.value) }, [
-              h("option", { value: "host" }, t("ocrModeHost")),
-              h("option", { value: "off" }, t("ocrModeOff")),
-            ]),
+            children: h(Segmented, {
+              value: v.ocrMode || "host",
+              options: [
+                { value: "host", label: t("ocrModeHost") },
+                { value: "off", label: t("ocrModeOff") },
+              ],
+              onSelect: (val) => save("ocrMode", val),
+            }),
           }),
           Field({
             label: t("ocrHostModel"),
@@ -227,10 +301,14 @@ window.__ModuleLoader__.load({
           Field({
             label: t("dialogPositionMode"),
             hint: t("dialogPositionModeHint"),
-            children: h("select", { value: v.dialogPositionMode || "cursor", onChange: (e) => save("dialogPositionMode", e.target.value) }, [
-              h("option", { value: "cursor" }, t("dialogPositionCursor")),
-              h("option", { value: "fixed" }, t("dialogPositionFixed")),
-            ]),
+            children: h(Segmented, {
+              value: v.dialogPositionMode || "cursor",
+              options: [
+                { value: "cursor", label: t("dialogPositionCursor") },
+                { value: "fixed", label: t("dialogPositionFixed") },
+              ],
+              onSelect: (val) => save("dialogPositionMode", val),
+            }),
           }),
           (v.dialogPositionMode || "cursor") === "fixed"
             ? h("div", { className: "scc-row" }, [
@@ -275,7 +353,11 @@ window.__ModuleLoader__.load({
             children: h(NumberInput, { value: v.dialogAutoCloseSec, min: 0, max: 3600, onCommit: (n) => save("dialogAutoCloseSec", n) }),
           }),
         ]),
-        h("div", { className: "scc-status" }, status),
+        h(
+          "div",
+          { className: status.startsWith("__bad__") ? "scc-status scc-status-bad" : "scc-status" },
+          status.startsWith("__bad__") ? status.slice(7) : status,
+        ),
       ]);
     }
 

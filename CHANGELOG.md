@@ -3,6 +3,85 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-11-01
+
+### Fixed — 设置页「出现位置」选了固定坐标却不生效 / Position mode never persisted
+
+用户报告「固定位置不生效」。排查过程与结论:
+
+**现象**:设置页把「出现位置」选成「固定坐标」后,界面一直显示固定坐标(重开
+设置页也还是),但窗口照旧跟着鼠标跑;而同一页里的 `固定 X/Y`、`宽度/高度`
+四个数字框却能正常存下来。
+
+**根因**:`scope.set(field, value)` 返回的是**布尔值** —— Host 拒绝时返回
+`false`,只有传输层出错才 reject。`client.js` 的 `save()` 只写了
+
+```js
+Promise.resolve(scope.set(field, v))
+  .then(() => flash(t("saved")))   // ← 不管成败都报「已保存」
+  .catch((err) => flash(`${t("error")} ...`));
+```
+
+于是写入被拒时界面照样提示「已保存」,用户以为存上了,配置其实一个字没变。
+UI 之所以还显示「固定坐标」,是因为下拉框的受控值来自 React state,而不是
+从 Host 回读。
+
+**Host 为什么会拒绝**:`settings.write` 会拿客户端传来的 `expectedRevision`
+和当前 revision 比对,不一致就抛 `SETTINGS_CONFLICT`。revision 的种子里含
+`fiber.uid`,**插件每重载一次 revision 就 +1**,客户端镜像随即过期。
+
+**修法**(`client.js`):
+
+1. `save()` 检查返回值:拿到 `false` 或 catch 到错误,一律显示红色的
+   「保存失败」,不再把失败当成功。
+2. 被拒时**自动重试一次** —— 控制器在拒绝后自己会 `mirror.load()` 把
+   revision 拉新,紧接着再写就能成功。不重试的话用户得手动再点一遍。
+3. 状态行支持错误样式(`.scc-status-bad`),成功/失败一眼可辨。
+4. 「出现位置」与「识别通道」两个下拉框换成**分段按钮**(`Segmented`):
+   每个按钮各自带 `onClick`,事件源和目标都是它自己,不经过 `<select>` 的
+   合成事件层。
+
+### Changed
+
+- 状态提示的显示时长 2.5s → 4s(失败信息需要更多时间读)。
+
+### Fixed — 保存成功了但插件不知道(设置热更新从来没生效) / Settings never hot-reloaded
+
+接上面那条:把保存链路修好之后,`cordis.patch.yml` 里确实出现了
+`dialogPositionMode: fixed`(文件 mtime 也对得上),但窗口还是跟着鼠标跑。
+查下去发现 **`index.mjs` 从来没有订阅过设置变更**:
+
+```js
+ctx.inject(["settings"], (settingsCtx) => {
+  const row = settings.describe().find((r) => r.ns === SETTINGS_NS);
+  ...
+  scheduleRestart();   // ← 只在插件加载时跑这一次
+});
+```
+
+`settings` 服务确实有变更事件,签名是
+
+```ts
+'settings/document-updated'(ns: SettingsNamespace, revision: number): void
+```
+
+但插件没监听,于是用户在设置页改完,宿主把值写进了 profile patch,
+**运行中的插件毫不知情**,`liveConfig` 停在旧值,`watcherKey` 也一直相等,
+`scheduleRestart` 每次都提前 return —— 助手进程按旧配置跑到底。
+用户看到的正是「改了设置没反应 / 固定位置不生效」。
+
+**修法**(`index.mjs`):
+
+1. 把读设置那段抽成 `pullSettings(settings, { dropSchemaDefaults })`。
+2. 在 `ctx.inject(["settings"], ...)` 里 `settingsCtx.on("settings/document-updated", (ns) => ...)`,
+   只处理 `ns === SETTINGS_NS` 的变更(`ctx.on` 返回的 disposer 绑在当前 fiber 上,
+   fiber 卸载时自动摘除)。
+3. **变更更新时不再套 `dropDefaults`**:该函数会滤掉「等于 schema 默认值」的字段,
+   而 `cursor` 恰好就是 `dialogPositionMode` 的默认值 —— 用户从 `fixed` 改回
+   `cursor` 时那次改动会被当成「没改」丢掉,`liveConfig` 永远停在 `fixed`。
+   首次加载仍保留 `dropDefaults`(防老版本宿主把默认值灌进来冲掉 config.json),
+   后续变更全量应用。
+
 ## [0.4.1] - 2026-11-01
 
 ### Fixed — 一次复制弹出两个窗口 / Two dialogs for one copy

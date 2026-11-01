@@ -126,6 +126,10 @@ function dropDefaults(flat) {
   );
 }
 
+// 导出给测试用:钉住「等于默认值的字段会被丢掉」这个行为,以及它在
+// settings/document-updated 路径上必须被关掉(否则改回默认值不生效)。
+export { dropDefaults, fromFlat, mergeSettings };
+
 /**
  * settings 投影值 → 插件嵌套结构(只取真实存在的字段)。
  * 设置服务的 value 是**投影结果**,缺字段时返回 undefined;若无脑写进
@@ -371,17 +375,44 @@ export function apply(ctx, input = {}) {
   // schema 默认值也在里面(实测 vaultPath 恒为 "")。拿它覆盖 liveConfig 会把
   // config.json 里配好的 vaultPath 冲成空串 → scheduleRestart 直接 return,
   // 刚起来的监听助手还会被 stopAsync 杀掉 → 截图永远不弹窗(2026-09-29 定位的故障 B)。
+  //
+  // 2026-11-01:原先这里**只在插件加载时读一次**,没有任何变更订阅 —— 于是用户在
+  // 设置页改完(写成功了、yml 也变了)插件毫不知情,watcher 永远按旧配置跑。
+  // 用户看到的就是「改了设置没反应 / 固定位置不生效」。现在补上
+  // `settings/document-updated` 订阅(宿主 emit,签名 (ns, revision)),
+  // 每次写完都重新拉一遍 user 覆盖层再比对特征串决定要不要重启助手。
+  // `row.user` 是**用户显式写进 patch 的覆盖层**,本身就不含 schema 默认值;
+  // 首次加载再套一层 dropDefaults 是历史保守做法(防老版本宿主把默认值灌进来)。
+  // 但**变更更新时不能 drop**:用户把「出现位置」从 fixed 改回 cursor 时,
+  // cursor 恰好等于 schema 默认值,被 drop 掉就等于"这次改动被忽略",
+  // liveConfig 永远停在 fixed —— 正是「切不回跟随鼠标」的成因。
+  const pullSettings = (settings, { dropSchemaDefaults }) => {
+    // 兼容旧版 DSH:没有 describe 就退回纯 JSON 配置,不报错。
+    if (!settings || typeof settings.describe !== "function") return;
+    const row = settings.describe().find((r) => r.ns === SETTINGS_NS);
+    if (!row) return;
+    const flat = flattenConfig(row.user);
+    const explicit = dropSchemaDefaults ? dropDefaults(flat) : flat;
+    if (Object.keys(explicit).length === 0) return;
+    liveConfig = mergeSettings(liveConfig, explicit);
+    scheduleRestart();
+  };
+
   ctx.inject(["settings"], (settingsCtx) => {
     try {
       const settings = settingsCtx.settings;
-      // 兼容旧版 DSH:没有 describe 就退回纯 JSON 配置,不报错。
-      if (!settings || typeof settings.describe !== "function") return;
-      const row = settings.describe().find((r) => r.ns === SETTINGS_NS);
-      if (!row) return;
-      const explicit = dropDefaults(flattenConfig(row.user));
-      if (Object.keys(explicit).length === 0) return;
-      liveConfig = mergeSettings(liveConfig, explicit);
-      scheduleRestart();
+      pullSettings(settings, { dropSchemaDefaults: true });
+      // 订阅本命名空间的变更:别的插件的设置变了不归我们管。
+      // ctx.on 返回的 disposer 已经绑在 settingsCtx 这个 fiber 上,fiber 卸载时
+      // 会自动摘掉,不需要再套一层 ctx.effect。
+      settingsCtx.on("settings/document-updated", (ns) => {
+        if (ns !== SETTINGS_NS) return;
+        try {
+          pullSettings(settings, { dropSchemaDefaults: false });
+        } catch (err) {
+          ctx.logger.warn(`dsh-screenshot-capture: 应用新设置失败:${err.message}`);
+        }
+      });
     } catch (err) {
       ctx.logger.warn(`dsh-screenshot-capture: 读取设置失败,使用 JSON 配置:${err.message}`);
     }
