@@ -15,7 +15,7 @@
  */
 import assert from "node:assert/strict";
 
-const { dropDefaults, fromFlat, mergeSettings, flattenConfig } = await import("../index.mjs");
+const { dropDefaults, fromFlat, mergeSettings, flattenConfig, geometryKeyOf } = await import("../index.mjs");
 
 // ---- ① dropDefaults 的语义:等于默认值的字段会被丢掉 ----
 // 这是它存在的理由(防老版本宿主把默认值灌进来冲掉 config.json),
@@ -79,5 +79,36 @@ assert.equal(live.dialog.fixedX, 1201);
 assert.equal(live.dialog.autoCloseSec, 0);
 applyUpdate({ dialogPositionMode: "cursor" }); // 改回默认值
 assert.equal(live.dialog.positionMode, "cursor", "改回默认值也要生效(这是 0.4.2 修的那条)");
+
+// ---- ⑦ geometryKeyOf:判断"用户动过窗口几何设置"的判据 ----
+// 0.4.6 起「记住上次位置/大小」是无条件生效的,所以必须有个办法知道
+// 用户什么时候在设置页主动改了几何 —— 那时候得把旧记录删掉,否则
+// 新设置永远被压住,表现为"改了完全没反应"。
+const geoBase = geometryKeyOf(base);
+assert.equal(geometryKeyOf(base), geoBase, "同一份配置算两次必须相同(否则每次重载都误删记录)");
+
+for (const [field, value] of [
+  ["dialogPositionMode", "fixed"],
+  ["dialogFixedX", 111],
+  ["dialogFixedY", 222],
+  ["dialogWidth", 800],
+  ["dialogHeight", 600],
+]) {
+  const changed = mergeSettings(base, { [field]: value });
+  assert.notEqual(geometryKeyOf(changed), geoBase, `${field} 变了必须被认作几何变化`);
+}
+
+// 与窗口几何无关的设置变了,不该动记录
+for (const [field, value] of [
+  ["pollIntervalMs", 500],
+  ["cooldownMs", 3000],
+  ["dialogOffsetX", 40],
+  ["dialogOffsetY", 40],
+  ["dialogPreviewMaxWidth", 500],
+  ["dialogAutoCloseSec", 5],
+]) {
+  const changed = mergeSettings(base, { [field]: value });
+  assert.equal(geometryKeyOf(changed), geoBase, `${field} 与窗口几何无关,不该删记录`);
+}
 
 console.log("[settings-reload-test] 全部通过");

@@ -193,28 +193,63 @@ if ($null -eq $s6) { 'FAIL 场景6 没抓到窗体'; exit 1 }
 Check '记录过小时宽度按 MinimumSize 兜底' ($s6.w -ge 220) "实际 $($s6.w)"
 Check '记录过小时高度按 MinimumSize 兜底' ($s6.h -ge 240) "实际 $($s6.h)"
 
-# ---- 场景 7:cursor 模式下不该被记录影响 ----
+# ---- 场景 7:cursor 模式也照样沿用记录(记住位置是默认行为,不是可选模式) ----
+# 这条以前断言的是"cursor 不受记录影响"。那是老设计:只有 positionMode=remember
+# 才读记录,结果默认的 cursor/fixed 用户拖完窗下次照样弹回原处 —— 记录写了没人读。
 @{ x = 400; y = 260; width = 520; height = 460 } | ConvertTo-Json -Compress | Set-Content -Path $statePath -Encoding UTF8
 Set-Mode 'cursor'
 $s7 = Show-And-Snap
 if ($null -eq $s7) { 'FAIL 场景7 没抓到窗体'; exit 1 }
-Check 'cursor 模式不受记录影响(仍在指针附近)' `
-  (([Math]::Abs($s7.x - ($wa.Left + 4 + 60)) -le 40) -and ([Math]::Abs($s7.y - ($wa.Top + 4 + 60)) -le 40)) `
-  "窗口 ($($s7.x),$($s7.y)) 期望≈($($wa.Left + 64),$($wa.Top + 64))"
+Check 'cursor 模式也沿用记录的位置' `
+  (($s7.x -eq 400) -and ($s7.y -eq 260)) "窗口 ($($s7.x),$($s7.y)) 期望 (400,260)"
+Check 'cursor 模式也沿用记录的大小' `
+  (($s7.w -eq 520) -and ($s7.h -eq 460)) "尺寸 $($s7.w)x$($s7.h) 期望 520x460"
 
-# ---- 场景 8:fixed 模式下不该被记录影响 ----
+# ---- 场景 8:fixed 模式也照样沿用记录 ----
 @{ x = 400; y = 260; width = 520; height = 460 } | ConvertTo-Json -Compress | Set-Content -Path $statePath -Encoding UTF8
 Set-Mode 'fixed'
 $script:config.fixedX = 150
 $script:config.fixedY = 150
 $s8 = Show-And-Snap
 if ($null -eq $s8) { 'FAIL 场景8 没抓到窗体'; exit 1 }
-Check 'fixed 模式不受记录影响(仍在 fixedX/Y)' `
-  (([Math]::Abs($s8.x - 150) -le 12) -and ([Math]::Abs($s8.y - 150) -le 12)) `
-  "窗口 ($($s8.x),$($s8.y)) 期望≈(150,150)"
+Check 'fixed 模式也沿用记录的位置(压过 fixedX/Y)' `
+  (($s8.x -eq 400) -and ($s8.y -eq 260)) "窗口 ($($s8.x),$($s8.y)) 期望 (400,260)"
 
-# ---- 场景 9:源码层 —— 三种模式都要在 schema/客户端里声明 ----
-Check '源码支持 remember 模式' ($src.Contains('"remember"')) '缺 remember 分支'
+# ---- 场景 8b:没有记录时,fixed 模式才按 fixedX/Y 摆 ----
+if (Test-Path $statePath) { Remove-Item $statePath -Force }
+Set-Mode 'fixed'
+$script:config.fixedX = 150
+$script:config.fixedY = 150
+$s8b = Show-And-Snap
+if ($null -eq $s8b) { 'FAIL 场景8b 没抓到窗体'; exit 1 }
+Check '没有记录时 fixed 模式按 fixedX/Y 摆' `
+  (([Math]::Abs($s8b.x - 150) -le 12) -and ([Math]::Abs($s8b.y - 150) -le 12)) `
+  "窗口 ($($s8b.x),$($s8b.y)) 期望≈(150,150)"
+
+# ---- 场景 8c:拉大窗口后关掉,下次按拉大后的尺寸打开 ----
+# 用户明确要求的那条:调整过的大小也要记住。
+if (Test-Path $statePath) { Remove-Item $statePath -Force }
+Set-Mode 'cursor'
+$s8c = Show-And-Snap -Mutate {
+  param($f)
+  $f.Size = New-Object System.Drawing.Size(760, 640)
+}
+if ($null -eq $s8c) { 'FAIL 场景8c 没抓到窗体'; exit 1 }
+$rec = $null
+if (Test-Path $statePath) { $rec = Get-Content $statePath -Raw | ConvertFrom-Json }
+Check '拉大后关窗记下了新尺寸' `
+  (($null -ne $rec) -and ($rec.width -eq 760) -and ($rec.height -eq 640)) `
+  "记录: $($rec | ConvertTo-Json -Compress)"
+$s8d = Show-And-Snap
+if ($null -eq $s8d) { 'FAIL 场景8d 没抓到窗体'; exit 1 }
+Check '下次按拉大后的尺寸打开' `
+  (($s8d.w -eq 760) -and ($s8d.h -eq 640)) "尺寸 $($s8d.w)x$($s8d.h) 期望 760x640"
+
+# ---- 场景 9:源码层 ----
+# 注意这里**不**再断言源码里有 "remember" 分支:记住位置已经改成无条件生效,
+# remember 只剩兼容老配置的作用(schema 里还认这个值,行为等同 cursor)。
+Check '位置记录无条件优先生效' `
+  ($src.Contains('if ($null -ne $remembered)')) '记录仍在被 positionMode 挡着'
 Check '关窗时挂 FormClosing 记录位置' ($src.Contains('Add_FormClosing')) '缺 Add_FormClosing'
 Check '关窗记录用 GetNewClosure 捕获作用域' ($src.Contains('}.GetNewClosure())')) '缺 GetNewClosure'
 Check '状态文件默认落在 statePath' ($src.Contains('dialog-state.json')) '缺默认 statePath'

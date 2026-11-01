@@ -48,6 +48,16 @@ const POWERSHELL = join(
  */
 const LOCK_DIR = join(homedir(), ".dsh", "dsh-screenshot-capture");
 const LOCK_PATH = join(LOCK_DIR, "watcher.lock");
+/**
+ * 悬浮窗「上次关闭时的位置和大小」存在这儿。
+ *
+ * 必须落在 homedir 下而不是 tmpdir —— 后者每个进程/每个 shell 都可能不同
+ * (见上面 LOCK_DIR 的注释),而且系统清临时目录时会连位置一起清掉。
+ *
+ * 导出是给 index.mjs 用的:用户在设置页主动改了窗口尺寸/固定坐标时,
+ * 那份记录得让路(否则旧记录会一直压住新设置,表现为"改了没反应")。
+ */
+export const DIALOG_STATE_PATH = join(LOCK_DIR, "dialog-state.json");
 
 /**
  * 剪贴板监听器:拉起常驻 PowerShell 助手(轮询剪贴板 + 系统级悬浮窗),
@@ -150,10 +160,8 @@ export class ClipboardWatcher extends EventEmitter {
       dupWindowMs: this.config.dupWindowMs ?? 6000,
       // 悬浮窗自动关闭秒数;0 = 一直等用户点
       autoCloseSec: this.config.dialog?.autoCloseSec ?? 0,
-      // 记住上次关闭位置时,状态文件写哪儿。必须落在 homedir 下而不是
-      // tmpdir —— 后者每个进程/每个 shell 都可能不同(见 LOCK_DIR 的注释),
-      // 而且系统清临时目录时会连位置一起清掉。
-      statePath: join(LOCK_DIR, "dialog-state.json"),
+      // 记住上次关闭位置时,状态文件写哪儿。
+      statePath: DIALOG_STATE_PATH,
     };
     mkdirSync(this.workDir, { recursive: true });
     writeFileSync(join(this.workDir, "watcher-config.json"), JSON.stringify(flat), "utf8");

@@ -87,6 +87,12 @@ function Invoke-DialogProbe {
   $global:config = $Cfg
   $script:PointerOverride = [scriptblock]::Create("return (New-Object System.Drawing.Point($($Pointer.X), $($Pointer.Y)))")
 
+  # 位置/大小记录现在**无条件优先生效**(不再只有 remember 模式才读),所以
+  # 每次探测前必须先清掉它 —— 否则上一次弹窗关掉时写下的记录会压过这一轮
+  # 想验证的 fixedX/fixedY 和固定尺寸,断言就变成了"上一轮的结果"。
+  $sp = Get-StatePath
+  if (Test-Path $sp) { Remove-Item $sp -Force -ErrorAction SilentlyContinue }
+
   $clock = @{ done = $false; snap = $null }
   $t = New-Object System.Windows.Forms.Timer
   $t.Interval = 700

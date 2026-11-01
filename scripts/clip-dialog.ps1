@@ -512,22 +512,23 @@ function Show-CaptureDialog {
   $form.Add_Shown({ $refreshTimer.Start() }.GetNewClosure())
 
   # --- 位置 ---------------------------------------------------------------
-  # 三种模式:
+  # **上次关闭时的位置和大小无条件优先生效**(用户拖过、拉大过,就该按他摆的来)。
+  # positionMode 只决定"还没有记录时第一次出现在哪儿":
   #   cursor(默认):跟着鼠标,按 offsetX/offsetY 摆在光标右下方;放不下就翻到
   #                 左上侧(历史行为,原样保留)。
-  #   fixed        :每次都出现在 fixedX/fixedY 这个**屏幕坐标**上,与鼠标无关。
+  #   fixed        :出现在 fixedX/fixedY 这个**屏幕坐标**上,与鼠标无关。
   #                 多显示器下坐标系是整个虚拟桌面(副屏在主屏左边时 x 为负),
   #                 所以这里用 VirtualScreen 而不是某个 Screen 的 WorkingArea ——
   #                 否则钉在副屏上的窗会被 clamp 回主屏。
-  #   remember     :沿用上次关闭时的位置**和大小**。没记录过(或记录已失效,
-  #                 比如那块屏拔了)就退回 cursor 行为,不至于弹到看不见的地方。
-  # 三种模式都保留"别跑出屏幕"的收敛,但 fixed 模式下若用户明确钉在副屏,
-  # 只要该点在虚拟桌面内就按用户说的摆。
+  #   remember     :等同 cursor —— 保留这个值只为兼容老配置,新配置不必再选它。
+  #
+  # 早先 remember 是个**独立模式**:只有选它才会读记录。结果是默认的 fixed/cursor
+  # 用户拖完窗、拉完大小,下次照样弹回配置里的坐标和尺寸 —— 记录写了却没人读。
+  # 「记住上次位置」本来就该是默认行为,不该要用户先认识一个模式。
   $totalW = [int]$totalW
   $totalH = [int]$totalH
   $remembered = Get-RememberedGeometry
-  $useRemember = ([string]$config.positionMode -eq "remember") -and ($null -ne $remembered)
-  if ($useRemember) {
+  if ($null -ne $remembered) {
     # 记录的是**外框**矩形(Left/Top/Width/Height),所以还原也用外框,
     # 不能用 ClientSize —— 两边混着用会让窗口每开一次就胖一圈边框。
     $totalW = [Math]::Max([int]$remembered.width, [int]$form.MinimumSize.Width)

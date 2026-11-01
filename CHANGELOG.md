@@ -3,6 +3,65 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.6] - 2026-11-01
+
+### Fixed — 拖动过的位置、拉过的大小现在真的会被记住 / Geometry is remembered by default
+
+**用户反馈**:「移动窗口关闭后,并没有记住上回关闭的位置,未从关闭的位置打开。
+还有调整窗口大小,也要记住它的调整后的大小,重新打开时要按上次调整的大小打开。」
+
+**根因**:记住位置的代码一直在跑 —— `Add_FormClosing` 无条件写记录,所以
+`dialog-state.json` 里确实躺着 `{"x":360,"y":122,"width":1127,"height":1150}`。
+**但读记录那一步被 `positionMode` 挡着**:
+
+```powershell
+$useRemember = ([string]$config.positionMode -eq "remember") -and ($null -ne $remembered)
+```
+
+0.4.4 把「记住上次位置」做成了一个**独立的模式**,只有显式选它才会读记录。
+而用户的配置是 `dialogPositionMode: fixed` —— 于是记录写了没人读,下次照样
+弹回 `fixedX/fixedY` 和配置里的固定尺寸。尺寸问题也是同一个根因:拉大后记下了,
+但读不到,所以仍按 `dialogWidth/dialogHeight` 开。
+
+这本身是设计错误:**「记住上次位置」本来就该是默认行为**,不该要用户先认识
+一个叫「记住上次位置」的模式才生效。
+
+**改动**:
+
+1. **`scripts/clip-dialog.ps1`** —— 记录无条件优先生效:
+   ```powershell
+   $remembered = Get-RememberedGeometry
+   if ($null -ne $remembered) { ...按记录的位置和大小... }
+   elseif ([string]$config.positionMode -eq "fixed") { ... }
+   else { ...cursor... }
+   ```
+   `positionMode` 现在只决定**没有记录时第一次**出现在哪儿。`remember` 值仍然
+   接受(等同 `cursor`),只为兼容老配置。
+2. **`index.mjs`** —— 用户主动改了「宽度 / 高度 / 固定 X / 固定 Y / 出现位置」
+   时,把 `dialog-state.json` 删掉。否则新设置永远被旧记录压住,变成更难理解的
+   「改了没反应」。判据是新导出的 `geometryKeyOf(cfg)`,只挑这五个字段 ——
+   改轮询间隔、OCR 模型之类不该动记录。
+   **只在 `settings/document-updated` 路径上做**,首次加载只对齐基线:插件每次
+   重载都会走一遍首次加载,那时拿构造时的值去比一定"不相等",一比较就把记录
+   删了,等于每次重启都忘掉位置 —— 正是这个功能最不该有的表现。
+3. **`clipboard.mjs`** —— 把状态文件路径导出成 `DIALOG_STATE_PATH`,给 `index.mjs`
+   清除时用(原来是在 `writeWatcherConfig` 里内联拼的)。
+4. **`client.js`** —— 「出现位置」去掉 `记住上次位置` 这个选项(它已经没意义了),
+   提示文案改成说明"之后你拖到哪儿、拉成多大,下次就按那个样子打开;改这里的
+   数字会覆盖那个记忆"。宽度/高度的提示同步补一句。
+
+**测试**:
+- `test-dialog-remember.ps1` 从 21 项扩到 28 项。原来场景 7/8 断言的是
+  「cursor / fixed 模式**不受**记录影响」—— 那正是被修掉的错误行为,现在反过来
+  断言「cursor / fixed 也照样沿用记录」。新增场景 8c/8d:把窗口拉到 760×640
+  再关掉,断言记录里是新尺寸、下次就按 760×640 打开(用户明确要求的那条)。
+- `test-dialog-fixed.ps1` 加一步:每次探测前清掉状态文件。记录无条件生效之后,
+  同一个测试进程里上一次弹窗关掉时写下的记录会压过这一轮要验证的 fixedX/Y,
+  断言就变成"上一轮的结果"了。
+- `test-settings-reload.mjs` 加 11 组断言钉住 `geometryKeyOf` 的判据:五个几何
+  字段任一变化都要认出来,六个与几何无关的字段变了都不该删记录,且同一份配置
+  算两次必须相同(否则每次重载都误删)。
+
 ## [0.4.5] - 2026-11-01
 
 ### Changed — 窗口开着时又截图,原地换图 / Refresh the preview instead of stacking dialogs
