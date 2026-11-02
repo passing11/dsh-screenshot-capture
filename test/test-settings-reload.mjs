@@ -80,12 +80,14 @@ assert.equal(live.dialog.autoCloseSec, 0);
 applyUpdate({ dialogPositionMode: "cursor" }); // 改回默认值
 assert.equal(live.dialog.positionMode, "cursor", "改回默认值也要生效(这是 0.4.2 修的那条)");
 
-// ---- ⑦ geometryKeyOf:判断"用户动过窗口几何设置"的判据 ----
-// 0.4.6 起「记住上次位置/大小」是无条件生效的,所以必须有个办法知道
-// 用户什么时候在设置页主动改了几何 —— 那时候得把旧记录删掉,否则
-// 新设置永远被压住,表现为"改了完全没反应"。
+// ---- ⑦ geometryKeyOf:判断"哪些字段算窗口几何" ----
+// 0.4.6 曾用这个判据决定"要不要删掉位置记录"——那时记录无条件优先,设置页里
+// 填的坐标/尺寸永远被压住,只能靠删记录让新设置生效。
+// 0.4.8 起 remember 是**独立模式**,fixed/cursor 根本不读记录,两者不再冲突,
+// 删记录那套逻辑也随之去掉。函数本身留着,只作为"哪些字段属于窗口几何"的
+// 单一出处 —— 免得以后又有人手抄一份字段清单,抄漏了才发现。
 const geoBase = geometryKeyOf(base);
-assert.equal(geometryKeyOf(base), geoBase, "同一份配置算两次必须相同(否则每次重载都误删记录)");
+assert.equal(geometryKeyOf(base), geoBase, "同一份配置算两次必须相同");
 
 for (const [field, value] of [
   ["dialogPositionMode", "fixed"],
@@ -98,7 +100,7 @@ for (const [field, value] of [
   assert.notEqual(geometryKeyOf(changed), geoBase, `${field} 变了必须被认作几何变化`);
 }
 
-// 与窗口几何无关的设置变了,不该动记录
+// 与窗口几何无关的设置变了,不算几何变化
 for (const [field, value] of [
   ["pollIntervalMs", 500],
   ["cooldownMs", 3000],
@@ -108,7 +110,14 @@ for (const [field, value] of [
   ["dialogAutoCloseSec", 5],
 ]) {
   const changed = mergeSettings(base, { [field]: value });
-  assert.equal(geometryKeyOf(changed), geoBase, `${field} 与窗口几何无关,不该删记录`);
+  assert.equal(geometryKeyOf(changed), geoBase, `${field} 与窗口几何无关,不该算几何变化`);
 }
+
+// remember 是合法取值,不是"历史遗留等同 cursor"
+assert.equal(
+  mergeSettings(base, { dialogPositionMode: "remember" }).dialog.positionMode,
+  "remember",
+  "remember 必须原样保留,不能被 merge 折叠成 cursor",
+);
 
 console.log("[settings-reload-test] 全部通过");

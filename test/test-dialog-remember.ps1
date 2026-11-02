@@ -194,43 +194,42 @@ if ($null -eq $s6) { 'FAIL 场景6 没抓到窗体'; exit 1 }
 Check '记录过小时宽度按 MinimumSize 兜底' ($s6.w -ge 220) "实际 $($s6.w)"
 Check '记录过小时高度按 MinimumSize 兜底' ($s6.h -ge 240) "实际 $($s6.h)"
 
-# ---- 场景 7:cursor 模式也照样沿用记录(记住位置是默认行为,不是可选模式) ----
-# 这条以前断言的是"cursor 不受记录影响"。那是老设计:只有 positionMode=remember
-# 才读记录,结果默认的 cursor/fixed 用户拖完窗下次照样弹回原处 —— 记录写了没人读。
+# ---- 场景 7:remember 是**独立模式** —— cursor 模式不看记录 ----
+# 0.4.6 曾把记住位置改成无条件默认行为,这几条断言被反过来写过。0.4.8 起恢复成
+# 三种模式各管各的:cursor 只认鼠标,记录写得再离谱也不该把窗拽走。
 @{ x = 400; y = 260; width = 520; height = 460 } | ConvertTo-Json -Compress | Set-Content -Path $statePath -Encoding UTF8
 Set-Mode 'cursor'
 $s7 = Show-And-Snap
 if ($null -eq $s7) { 'FAIL 场景7 没抓到窗体'; exit 1 }
-Check 'cursor 模式也沿用记录的位置' `
-  (($s7.x -eq 400) -and ($s7.y -eq 260)) "窗口 ($($s7.x),$($s7.y)) 期望 (400,260)"
-Check 'cursor 模式也沿用记录的大小' `
-  (($s7.w -eq 520) -and ($s7.h -eq 460)) "尺寸 $($s7.w)x$($s7.h) 期望 520x460"
+Check 'cursor 模式不受记录位置影响' `
+  (-not (($s7.x -eq 400) -and ($s7.y -eq 260))) "窗口 ($($s7.x),$($s7.y)) 不该等于记录里的 (400,260)"
+Check 'cursor 模式不受记录大小影响' `
+  (-not (($s7.w -eq 520) -and ($s7.h -eq 460))) "尺寸 $($s7.w)x$($s7.h) 不该等于记录里的 520x460"
 
-# ---- 场景 8:fixed 模式也照样沿用记录 ----
+# ---- 场景 8:fixed 模式也**不**看记录 —— 用户在设置页填的坐标说了算 ----
 @{ x = 400; y = 260; width = 520; height = 460 } | ConvertTo-Json -Compress | Set-Content -Path $statePath -Encoding UTF8
 Set-Mode 'fixed'
 $script:config.fixedX = 150
 $script:config.fixedY = 150
 $s8 = Show-And-Snap
 if ($null -eq $s8) { 'FAIL 场景8 没抓到窗体'; exit 1 }
-Check 'fixed 模式也沿用记录的位置(压过 fixedX/Y)' `
-  (($s8.x -eq 400) -and ($s8.y -eq 260)) "窗口 ($($s8.x),$($s8.y)) 期望 (400,260)"
+Check 'fixed 模式按 fixedX/fixedY 摆,不被记录覆盖' `
+  (([Math]::Abs($s8.x - 150) -le 12) -and ([Math]::Abs($s8.y - 150) -le 12)) `
+  "窗口 ($($s8.x),$($s8.y)) 期望≈(150,150)"
 
-# ---- 场景 8b:没有记录时,fixed 模式才按 fixedX/Y 摆 ----
+# ---- 场景 8b:没有记录时 remember 模式退回 cursor 行为 ----
 if (Test-Path $statePath) { Remove-Item $statePath -Force }
-Set-Mode 'fixed'
-$script:config.fixedX = 150
-$script:config.fixedY = 150
+Set-Mode 'remember'
 $s8b = Show-And-Snap
 if ($null -eq $s8b) { 'FAIL 场景8b 没抓到窗体'; exit 1 }
-Check '没有记录时 fixed 模式按 fixedX/Y 摆' `
-  (([Math]::Abs($s8b.x - 150) -le 12) -and ([Math]::Abs($s8b.y - 150) -le 12)) `
-  "窗口 ($($s8b.x),$($s8b.y)) 期望≈(150,150)"
+$vs8b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+Check '没有记录时 remember 退回 cursor,窗口仍落在虚拟桌面内' `
+  (($s8b.x -ge $vs8b.Left) -and ($s8b.y -ge $vs8b.Top) -and (($s8b.x + $s8b.w) -le $vs8b.Right) -and (($s8b.y + $s8b.h) -le $vs8b.Bottom)) `
+  "窗口 ($($s8b.x),$($s8b.y)) $($s8b.w)x$($s8b.h) 在虚拟桌面外"
 
-# ---- 场景 8c:拉大窗口后关掉,下次按拉大后的尺寸打开 ----
-# 用户明确要求的那条:调整过的大小也要记住。
+# ---- 场景 8c:在 remember 模式下拉大窗口后关掉,下次按拉大后的尺寸打开 ----
 if (Test-Path $statePath) { Remove-Item $statePath -Force }
-Set-Mode 'cursor'
+Set-Mode 'remember'
 $s8c = Show-And-Snap -Mutate {
   param($f)
   $f.Size = New-Object System.Drawing.Size(760, 640)
@@ -247,10 +246,12 @@ Check '下次按拉大后的尺寸打开' `
   (($s8d.w -eq 760) -and ($s8d.h -eq 640)) "尺寸 $($s8d.w)x$($s8d.h) 期望 760x640"
 
 # ---- 场景 9:源码层 ----
-# 注意这里**不**再断言源码里有 "remember" 分支:记住位置已经改成无条件生效,
-# remember 只剩兼容老配置的作用(schema 里还认这个值,行为等同 cursor)。
-Check '位置记录无条件优先生效' `
-  ($src.Contains('if ($null -ne $remembered)')) '记录仍在被 positionMode 挡着'
+# 记录**只在 remember 模式下**读 —— 0.4.6 曾无条件优先,那是设计错误:
+# 用户在设置页填的 fixedX/fixedY、宽度、高度全被旧记录压住,改了没反应。
+Check '记录只在 remember 模式下读取' `
+  ($src.Contains('if ([string]$config.positionMode -eq "remember") {')) '缺 remember 模式的读记录分支'
+Check '三种模式各管各的' `
+  ($src.Contains('$remembered = $null')) '缺 $remembered 默认置空'
 Check '关窗时挂 FormClosing 记录位置' ($src.Contains('Add_FormClosing')) '缺 Add_FormClosing'
 Check '关窗记录用 GetNewClosure 捕获作用域' ($src.Contains('}.GetNewClosure())')) '缺 GetNewClosure'
 Check '状态文件默认落在 statePath' ($src.Contains('dialog-state.json')) '缺默认 statePath'

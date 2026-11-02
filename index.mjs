@@ -1,7 +1,6 @@
-import { existsSync, unlinkSync } from "node:fs";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
-import { ClipboardWatcher, DIALOG_STATE_PATH } from "./clipboard.mjs";
+import { ClipboardWatcher } from "./clipboard.mjs";
 import { DEFAULT_CONFIG, ensureVault, plain, resolveConfig } from "./config.mjs";
 import { createSerialQueue, handleChoice } from "./core.mjs";
 import { listEntriesForDate, organizeDay } from "./organize.mjs";
@@ -128,14 +127,13 @@ function dropDefaults(flat) {
 }
 
 /**
- * 只挑「窗口该多大 / 出现在哪」这几个字段,用来判断用户是不是动过它们。
+ * 只挑「窗口该多大 / 出现在哪」这几个字段,供设置页与测试判断几何设置有没有变过。
  *
- * 这些字段一旦变了,就说明用户在设置页主动说了"窗口该是某个样子" ——
- * 这时必须把"上次关闭时的位置/大小"那条记录删掉,否则旧记录会一直压住
- * 新设置,表现为"改了完全没反应"。
- *
- * 反过来,改动别的设置(轮询间隔、OCR 模型之类)不该动记录 —— 用户没表达
- * 任何关于窗口几何的意图。
+ * 0.4.6 里这个函数用来决定"要不要删掉位置记录" —— 那时记录无条件优先,设置页里
+ * 填的坐标/尺寸永远被旧记录压住,只能靠删记录让新设置生效。
+ * 0.4.8 起 remember 是**独立模式**,`fixed` / `cursor` 根本不读记录,两者不再冲突,
+ * 删记录那套逻辑也一并去掉 —— 用户在别的模式下改偏移量,不该把记住的位置弄丢。
+ * 现在它只被 test-settings-reload.mjs 用来钉住"哪些字段算几何字段"。
  */
 function geometryKeyOf(cfg) {
   return JSON.stringify({
@@ -349,35 +347,6 @@ export function apply(ctx, input = {}) {
     busyTimer.unref?.();
   };
 
-  /**
-   * 用户**主动**改了窗口几何设置时,把"上次关闭时的位置/大小"那条记录删掉。
-   *
-   * 为什么需要这一步:记录现在无条件优先生效(拖过、拉大过,下次就该按你摆的来),
-   * 但这样一来用户在设置页填的 dialogWidth / dialogHeight / fixedX / fixedY
-   * 就永远被旧记录压住 —— 改了完全没反应,比之前更难理解。
-   * 判据是"这几个字段里有任何一个变了",因为它们的语义都是"窗口该多大/出现在哪",
-   * 用户一动它们,就是在说"别再按上次那样了"。
-   *
-   * 删文件失败不算错误:最坏情况是这次设置没立刻生效,不影响监听本身。
-   */
-  const clearDialogState = (reason) => {
-    try {
-      if (existsSync(DIALOG_STATE_PATH)) {
-        unlinkSync(DIALOG_STATE_PATH);
-        ctx.logger.info(`dsh-screenshot-capture: ${reason},已清除窗口位置记录`);
-      }
-    } catch (err) {
-      ctx.logger.warn(
-        `dsh-screenshot-capture: 清除窗口位置记录失败(不影响监听): ${err && err.message ? err.message : err}`,
-      );
-    }
-  };
-
-  /** 只挑"窗口该多大 / 出现在哪"这几个字段,用来判断用户是不是动过它们。 */
-  const geometryKey = geometryKeyOf;
-
-  let geometrySeen = geometryKey(liveConfig);
-
   const scheduleRestart = () => {
     const cfg = liveConfig;
     const key = configKey(cfg);
@@ -445,22 +414,6 @@ export function apply(ctx, input = {}) {
     const explicit = dropSchemaDefaults ? dropDefaults(flat) : flat;
     if (Object.keys(explicit).length === 0) return;
     liveConfig = mergeSettings(liveConfig, explicit);
-    // 几何设置变了就让旧记录让路,否则用户填的新尺寸/新坐标永远被它压住。
-    //
-    // 只在**变更**路径上做(dropSchemaDefaults === false 即 document-updated),
-    // 首次加载不做:插件每次重载都会走一遍首次加载,那时 geometrySeen 还是
-    // 构造时的值,拿它比一定"不相等" —— 一比较就把记录删了,等于每次重启
-    // 都忘掉上次的位置,正是这个功能最不该有的表现。
-    if (!dropSchemaDefaults) {
-      const geo = geometryKey(liveConfig);
-      if (geo !== geometrySeen) {
-        geometrySeen = geo;
-        clearDialogState("窗口几何设置已修改");
-      }
-    } else {
-      // 首次加载只对齐基线,不删记录 —— 否则每次重载插件都会忘掉位置。
-      geometrySeen = geometryKey(liveConfig);
-    }
     scheduleRestart();
   };
 

@@ -27,11 +27,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     prompt: "请识别图片中的全部文字内容,原样输出;数学公式用 LaTeX 输出。只输出识别结果,不要任何解释。",
   },
   dialog: {
-    // 悬浮窗**第一次**出现的位置(之后一律沿用上次关闭时的位置和大小):
+    // 悬浮窗出现在哪儿。三种模式各管各的:
     //   "cursor"   = 跟着鼠标(默认,历史行为)
     //   "fixed"    = 出现在 fixedX / fixedY 这个屏幕坐标上
-    //   "remember" = 历史值,现在等同 "cursor"。保留只为兼容老配置 ——
-    //                记住位置已经改成默认行为,不再需要专门选一个模式。
+    //   "remember" = 沿用上次关闭时的位置和大小;没有记录时退回 "cursor"
     positionMode: "cursor",
     // positionMode = "fixed" 时生效。单位是**屏幕像素**(多显示器虚拟桌面坐标系,
     // 主屏左上方的副屏 x 是负数,所以允许负值)。

@@ -37,14 +37,17 @@ window.__ModuleLoader__.load({
       ocrFallbackHint: "宿主模型不可用时自动回落通义千问(key 从环境变量 DASHSCOPE_API_KEY 读取,无需在此配置)",
       dialog: "悬浮窗",
       dialogPositionMode: "出现位置",
-      dialogPositionModeHint: "只决定**第一次**出现在哪儿:「跟随鼠标」在光标旁弹出;「固定坐标」出现在下面填的位置,和鼠标无关。之后你拖动窗口或拉大它,下次都会按你上次摆的样子打开 —— 想回到这里填的坐标/尺寸,改一下这几个数字即可。",
+      dialogPositionModeHint: "「跟随鼠标」在光标旁弹出;「固定坐标」出现在下面填的位置,和鼠标无关;「记住上次位置」沿用你上次关窗口时摆放的位置和大小。三种模式互不影响,随时可以切换。",
       dialogPositionCursor: "跟随鼠标",
       dialogPositionFixed: "固定坐标",
+      dialogPositionRemember: "记住上次位置",
+      dialogRememberHint: "沿用上次关闭窗口时的位置和大小。第一次用(还没有记录)时会退回「跟随鼠标」的行为。",
       dialogFixedX: "固定 X (px)",
       dialogFixedY: "固定 Y (px)",
       dialogWidth: "宽度 (px,0=自适应)",
       dialogHeight: "高度 (px,0=自适应)",
-      dialogSizeHint: "填 0 表示按内容自适应。设了宽度时预览图会等比缩放到窗宽;设了高度时多出来的空间给注释框。你在窗口上拖出来的大小会自动记住,改这里的数字会覆盖掉那个记忆。",
+      dialogSizeHint: "填 0 表示按内容自适应。设了宽度时预览图会等比缩放到窗宽;设了高度时多出来的空间给注释框。",
+      dialogSizeRememberHint: "这两种模式下的「宽度 / 高度」只在「跟随鼠标」「固定坐标」模式生效;切到「记住上次位置」后由记录决定。",
       dialogPreviewMaxWidth: "预览最大宽度 (px)",
       dialogPreviewMaxWidthHint: "仅在宽度填 0(自适应)时生效。",
       dialogOffsetX: "横向偏移 (px)",
@@ -76,14 +79,17 @@ window.__ModuleLoader__.load({
       ocrFallbackHint: "Falls back to Tongyi Qianwen when the host model is unavailable (key read from DASHSCOPE_API_KEY; not configured here)",
       dialog: "Floating window",
       dialogPositionMode: "Position",
-      dialogPositionModeHint: "Only decides where the window appears the **first** time: \"Follow cursor\" pops up next to the pointer; \"Fixed\" appears at the coordinates below, regardless of the pointer. After that, wherever you drag it and however big you stretch it is where it opens next time — change one of these numbers to go back to the configured geometry.",
+      dialogPositionModeHint: "\"Follow cursor\" pops up next to the pointer; \"Fixed\" appears at the coordinates below, regardless of the pointer; \"Remember last\" reuses the position and size you left the window at. The three modes are independent — switch freely.",
       dialogPositionCursor: "Follow cursor",
       dialogPositionFixed: "Fixed coordinates",
+      dialogPositionRemember: "Remember last",
+      dialogRememberHint: "Reuses the position and size from the last time you closed the window. With no record yet it falls back to \"Follow cursor\".",
       dialogFixedX: "Fixed X (px)",
       dialogFixedY: "Fixed Y (px)",
       dialogWidth: "Width (px, 0 = auto)",
       dialogHeight: "Height (px, 0 = auto)",
-      dialogSizeHint: "0 means size to content. With a fixed width the preview scales to fit it; with a fixed height the extra space goes to the note box. Whatever size you drag the window to is remembered automatically; changing these numbers overrides that memory.",
+      dialogSizeHint: "0 means size to content. With a fixed width the preview scales to fit it; with a fixed height the extra space goes to the note box.",
+      dialogSizeRememberHint: "These only apply in \"Follow cursor\" and \"Fixed\" modes; \"Remember last\" takes its geometry from the record instead.",
       dialogPreviewMaxWidth: "Preview max width (px)",
       dialogPreviewMaxWidthHint: "Only used when width is 0 (auto).",
       dialogOffsetX: "Horizontal offset (px)",
@@ -302,14 +308,18 @@ window.__ModuleLoader__.load({
             label: t("dialogPositionMode"),
             hint: t("dialogPositionModeHint"),
             children: h(Segmented, {
-              value: v.dialogPositionMode === "remember" ? "cursor" : (v.dialogPositionMode || "cursor"),
+              value: v.dialogPositionMode || "cursor",
               options: [
                 { value: "cursor", label: t("dialogPositionCursor") },
                 { value: "fixed", label: t("dialogPositionFixed") },
+                { value: "remember", label: t("dialogPositionRemember") },
               ],
               onSelect: (val) => save("dialogPositionMode", val),
             }),
           }),
+          (v.dialogPositionMode || "cursor") === "remember"
+            ? h("div", { className: "scc-hint" }, t("dialogRememberHint"))
+            : null,
           (v.dialogPositionMode || "cursor") === "fixed"
             ? h("div", { className: "scc-row" }, [
                 Field({
@@ -321,27 +331,34 @@ window.__ModuleLoader__.load({
                   children: h(NumberInput, { value: v.dialogFixedY, min: -20000, max: 20000, onCommit: (n) => save("dialogFixedY", n) }),
                 }),
               ])
+            : (v.dialogPositionMode || "cursor") === "cursor"
+              ? h("div", { className: "scc-row" }, [
+                  Field({
+                    label: t("dialogOffsetX"),
+                    children: h(NumberInput, { value: v.dialogOffsetX, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetX", n) }),
+                  }),
+                  Field({
+                    label: t("dialogOffsetY"),
+                    children: h(NumberInput, { value: v.dialogOffsetY, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetY", n) }),
+                  }),
+                ])
+              : null,
+          (v.dialogPositionMode || "cursor") === "remember"
+            ? null
             : h("div", { className: "scc-row" }, [
                 Field({
-                  label: t("dialogOffsetX"),
-                  children: h(NumberInput, { value: v.dialogOffsetX, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetX", n) }),
+                  label: t("dialogWidth"),
+                  hint: t("dialogSizeHint"),
+                  children: h(NumberInput, { value: v.dialogWidth, min: 0, max: 4000, onCommit: (n) => save("dialogWidth", n) }),
                 }),
                 Field({
-                  label: t("dialogOffsetY"),
-                  children: h(NumberInput, { value: v.dialogOffsetY, min: -1000, max: 1000, onCommit: (n) => save("dialogOffsetY", n) }),
+                  label: t("dialogHeight"),
+                  children: h(NumberInput, { value: v.dialogHeight, min: 0, max: 4000, onCommit: (n) => save("dialogHeight", n) }),
                 }),
               ]),
-          h("div", { className: "scc-row" }, [
-            Field({
-              label: t("dialogWidth"),
-              hint: t("dialogSizeHint"),
-              children: h(NumberInput, { value: v.dialogWidth, min: 0, max: 4000, onCommit: (n) => save("dialogWidth", n) }),
-            }),
-            Field({
-              label: t("dialogHeight"),
-              children: h(NumberInput, { value: v.dialogHeight, min: 0, max: 4000, onCommit: (n) => save("dialogHeight", n) }),
-            }),
-          ]),
+          (v.dialogPositionMode || "cursor") === "remember"
+            ? h("div", { className: "scc-hint" }, t("dialogSizeRememberHint"))
+            : null,
           Field({
             label: t("dialogPreviewMaxWidth"),
             hint: t("dialogPreviewMaxWidthHint"),
